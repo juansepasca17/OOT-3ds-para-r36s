@@ -126,3 +126,16 @@ Fase 2b (flags de compilación → LTO/PGO → cambios al generador AOT).
 **Pendiente:** el hilo del renderer usa ~129 ms/frame: ~40 GPU + ~22 PICA backend + ~65 sin
 atribuir (UI Fast3D/N64, copias de display, subidas de textura). Medir por fases en la consola.
 Fase D (`--local-state`) en evaluación x86. Menú Fn: se abre (565 primitivas) pero no se ve.
+
+### Fase D — primer experimento: `--local-state` (descartado)
+x86, misma medición de 900 frames (300 de calentamiento), throughput determinista:
+
+| Generador | Lógica/frame | `memory_state_fingerprint` |
+|---|---|---|
+| normal | 8.62 ms | 4724681108082561086 |
+| `--local-state` | 9.85 ms (+14 %) | 2977942875981937782 |
+
+Más lento (commit/reload de registros en cada llamada entre funciones) y huella distinta (falta confirmar
+determinismo base-vs-base). Próximos candidatos de D: flags solo cuando se leen (hoy
+`Oot3dAotSetSubtractFlags(..., 0xF)` calcula NZCV completo aunque solo se use Z), costo fijo de
+`Oot3dAotEnterBlock` por bloque, y despacho directo entre funciones.
