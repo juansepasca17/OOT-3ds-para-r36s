@@ -47,3 +47,13 @@
 - La auditoría del producto exigía el hash del ExHeader EUR. El ExHeader USA tiene el mismo entrypoint
   (`0x100000`) y el mismo tamaño de texto (3,973,120). → `patches/0001-accept-qualified-usa-exheader.patch`
   acepta hashes extra vía `OOT3D_ACCEPT_EXHEADER_SHA256` y mantiene todas las demás comprobaciones.
+
+### Consola del usuario (`OOT3D-Info.sh`, 2026-10-25)
+- **R36S-V12 Panel 4**, dArkOSRE **03082026**, Debian 13.3, kernel 4.4.189, glibc 2.41.
+- CPU 4× Cortex-A35 r0p2, máx. **1512 MHz** (governor ya en `performance`). Flags: asimd, aes, crc32.
+- RAM 895 MB usables + **zram 512 MB**. `/tmp` es tmpfs de 448 MB.
+- GPU Mali-G31 en `ff400000.gpu`, máx. **520 MHz**. libmali `bifrost-g31-rxp0-gbm`, la misma que en `deps/`.
+- SDL2 **2.32.10**. Pantalla 640×480 a **77 Hz** (`640x480p77`) → 30 fps no divide exacto la
+  frecuencia del panel: hay que medir el ritmo de frames (VSync vs. limitador propio).
+- Control: `GO-Super Gamepad` (js0/event2). PortMaster en `/opt/system/Tools/PortMaster`.
+- Tiene Ship of Harkinian (PortMaster) funcionando: referencia útil para el contexto GLES y los controles.
