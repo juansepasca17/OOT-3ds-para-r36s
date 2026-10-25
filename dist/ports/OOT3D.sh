@@ -92,14 +92,14 @@ echo "exit code: $code"
   grep -A6 '"pre_backend_cpu"' "$GAMEDIR/bench_gpu.json"
 
 # 2) Juego normal. Select+Start cierra el juego.
-msg "2/2 Abriendo el juego... (Select+Start para salir)"
+msg "2/2 Abriendo el juego... (Fn o R3: menu, Select+Start: salir)"
 sleep 2
 echo "---- juego ----"
 if [ -n "$controlfolder" ]; then
   $GPTOKEYB "oot3d_r36s" &
   pm_platform_helper "$GAMEDIR/oot3d_r36s" >/dev/null 2>&1
 fi
-"$GAMEDIR/oot3d_r36s" "${COMMON[@]}"
+OOT3D_INPUT_DEBUG=1 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}"
 echo "exit code juego: $?"
 
 [ -n "$OLD_CPU_GOV" ] && echo "$OLD_CPU_GOV" | $ESUDO tee "$CPU_GOV" >/dev/null 2>&1
