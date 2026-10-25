@@ -10,6 +10,7 @@ export SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy
 export __EGL_VENDOR_LIBRARY_FILENAMES="$G/libs/egl_vendor.d/50_mesa.json"
 export LIBGL_DRIVERS_PATH="$G/libs/dri" GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1 EGL_PLATFORM=surfaceless
 export MESA_GL_VERSION_OVERRIDE=4.5 MESA_GLSL_VERSION_OVERRIDE=450 TRIAEVUM_PARALLEL_PRESENTATION=0
+export SDL_VIDEO_EGL_DRIVER="$G/libs/libEGL.so.1" SDL_VIDEO_GL_DRIVER="$G/libs/libGL.so.1"
 missing=$(LD_LIBRARY_PATH="$G/libs" qemu-aarch64 -L /usr/aarch64-linux-gnu /lib/ld-linux-aarch64.so.1 --list "$G/oot3d_r36s" 2>&1 | grep "not found")
 [ -n "$missing" ] && echo "MISSING: $missing"
 time timeout "${TIMEOUT:-1800}" "$G/oot3d_r36s" \

@@ -44,6 +44,9 @@ export SDL_AUDIODRIVER=dummy
 export __EGL_VENDOR_LIBRARY_FILENAMES="$GAMEDIR/libs/egl_vendor.d/50_mesa.json"
 export LIBGL_DRIVERS_PATH="$GAMEDIR/libs/dri"
 export EGL_PLATFORM=surfaceless
+# En dArkOS libEGL.so apunta a libMali: forzar el EGL/GL incluidos.
+export SDL_VIDEO_EGL_DRIVER="$GAMEDIR/libs/libEGL.so.1"
+export SDL_VIDEO_GL_DRIVER="$GAMEDIR/libs/libGL.so.1"
 export GALLIUM_DRIVER=llvmpipe
 export LIBGL_ALWAYS_SOFTWARE=1
 export LP_NUM_THREADS=2
@@ -51,6 +54,10 @@ export MESA_GL_VERSION_OVERRIDE=4.5
 export MESA_GLSL_VERSION_OVERRIDE=450
 # El contexto GL vive en el hilo principal: presentación en serie.
 export TRIAEVUM_PARALLEL_PRESENTATION=0
+
+echo "-- entorno gráfico --"
+env | grep -E '^(SDL_|EGL|__EGL|LD_LIBRARY|LIBGL|GALLIUM|MESA)' | sort
+grep -rsE 'SDL_|EGL' /etc/environment /etc/profile.d/ 2>/dev/null | head -n 20
 
 run_bench() {
   local name=$1; shift
