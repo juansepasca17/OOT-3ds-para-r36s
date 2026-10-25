@@ -103,3 +103,26 @@ Fase 2b (flags de compilación → LTO/PGO → cambios al generador AOT).
 - `.wslconfig`: 10 GB y 12 hilos (Ryzen 5 7535HS, 15 GB). ccache (20 GB) + mold.
 - Lección: no restaurar el repo y re-aplicar parches; reescribe el script de auditoría y fuerza
   la recompilación de los 256 shards (que dependen de su paso de auditoría).
+
+### Pruebas 5–9 (2026-10-25, tarde)
+- **Bloqueo del paralelo resuelto.** El vigilante mostró al renderer girando en un recorrido de lista
+  dentro de libGLESv2 (estructura corrupta). Con `glspy.c` (LD_PRELOAD en qemu) se encontraron 24
+  llamadas GL sin contexto desde el hilo principal: `Ship::Gui::EndDraw → ImGui_ImplOpenGL3_RenderDrawData`.
+  Mesa/glvnd las ignora; Mali corrompe el contexto que usa el worker. Fix: en GLES, ImGui se dibuja en el
+  worker con una copia del draw data (como el backend Vulkan).
+- **PGO** (GCC, perfil de ~15 min de juego en la consola, `-fprofile-correction` por volcados con hilos
+  activos) + **memoria en línea** (`ReadFast`/`WriteFast` con camino rápido `always_inline`).
+- **Prueba 8 (diagnóstico de GPU):** normal 131.6 ms, sin dibujar 75.2 ms, `glFinish` 30–45 ms/frame.
+  `mediump` en fragmentos hace caer el compilador de Mali (`LLVM ERROR: Cannot select: intrinsic
+  %llvm.bifrost.fptrunc.te`) → descartado en este driver.
+- **Prueba 9:** ring de uniforms (map unsynchronized + fences): 128.9 ms (−2 %).
+
+| Versión | Lógica | Frame p50 | fps |
+|---|---|---|---|
+| Prueba 4 (serie) | 82.2 ms | 147.6 ms | ~6.8 |
+| Prueba 7 (paralelo + PGO + memoria) | 62.7 ms | 131.6 ms | 7.6 |
+| **Prueba 9 / v1.0** | **61.5 ms** | **128.9 ms** | **7.75** |
+
+**Pendiente:** el hilo del renderer usa ~129 ms/frame: ~40 GPU + ~22 PICA backend + ~65 sin
+atribuir (UI Fast3D/N64, copias de display, subidas de textura). Medir por fases en la consola.
+Fase D (`--local-state`) en evaluación x86. Menú Fn: se abre (565 primitivas) pero no se ve.
