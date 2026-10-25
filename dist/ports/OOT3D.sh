@@ -1,8 +1,6 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# PRUEBA 9: PGO + paralelo + memoria en linea + ring de uniforms. Medicion corta y juego.
-#   1) Medición de ~1 minuto con pantalla negra.
-#   2) Después abre el juego normal: Select+Start para salir.
+# Version 1.0 (2026-10-25): PGO + paralelo + memoria en linea + ring de uniforms.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -74,31 +72,20 @@ msg() {
 first_run=""
 [ -z "$(ls -A "$GAMEDIR/shadercache" 2>/dev/null)" ] && first_run=" Primera vez: compila shaders, puede tardar."
 
-# 1) Tres mediciones cortas en paralelo para ubicar el costo de GPU:
-#    normal (+ tiempo de espera de GPU), fragmentos en mediump, y sin dibujar.
-bench() {  # $1 nombre, resto: variables de entorno
-  local name=$1; shift
-  echo "---- medicion $name ----"
-  env "$@" TRIAEVUM_PARALLEL_PRESENTATION=1 OOT3D_HANG_DUMP_SECONDS=30     timeout 240 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" --parallel-presentation     --throughput-benchmark --disable-audio --frames 300 --benchmark-warmup-frames 100     --output "$GAMEDIR/bench_$name.json"
-  echo "exit code $name: $?"
-  [ -f "$GAMEDIR/bench_$name.json" ] && grep -A4 '"frame_times"' "$GAMEDIR/bench_$name.json"
-}
-msg "1/2 Midiendo rendimiento (1-2 min).$first_run"
-bench ring OOT3D_GL_FINISH_TIMING=1
 MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_name="paralelo"
 # El log se vuelca a la SD cada 10 s: sobrevive aunque se apague la consola.
 ( while sleep 10; do sync; done ) &
 SYNC_PID=$!
 
 # 2) Juego normal. Select+Start cierra el juego.
-msg "2/2 Abriendo el juego... (Select+Start: salir)"
+msg "Cargando Ocarina of Time 3D...$first_run (Select+Start: salir)"
 sleep 2
 echo "---- juego ($mode_name) ----"
 if [ -n "$controlfolder" ]; then
   $GPTOKEYB "oot3d_r36s" &
   pm_platform_helper "$GAMEDIR/oot3d_r36s" >/dev/null 2>&1
 fi
-OOT3D_INPUT_DEBUG=1 OOT3D_HANG_DUMP_SECONDS=60 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" "${MODE[@]}"
+"$GAMEDIR/oot3d_r36s" "${COMMON[@]}" "${MODE[@]}"
 echo "exit code juego: $?"
 
 [ -n "$OLD_CPU_GOV" ] && echo "$OLD_CPU_GOV" | $ESUDO tee "$CPU_GOV" >/dev/null 2>&1
