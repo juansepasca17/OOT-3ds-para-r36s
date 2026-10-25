@@ -37,3 +37,13 @@
 - WSL2 **Debian 13 trixie** instalado (12 hilos, 7.4 GB de RAM, mismo glibc que dArkOS).
 - `deps/mali/libmali-bifrost-g31-rxp0-gbm.so` (aarch64, 40.8 MB) descargada de
   `christianhaitian/rk3326_core_builds`.
+
+### Datos del juego e IR AOT
+- `scripts/prepare_gamedata.py`: receta `oot3d-usa-input-canonical-eur-ef210566` (entrada USA,
+  runtime EUR canónico). Entradas extraídas: code `ef210566…`, exheader `dbe5fa01…`, romfs `dd6def65…`
+  (idénticas a las que TriAevum probó). Adaptación en 2.2 s.
+- `forge prepare-aot-ir`: 12,442 funciones, 162,766 bloques, 924,535 instrucciones A32, 0 sin reclamar
+  (3.5 min en 1 hilo).
+- La auditoría del producto exigía el hash del ExHeader EUR. El ExHeader USA tiene el mismo entrypoint
+  (`0x100000`) y el mismo tamaño de texto (3,973,120). → `patches/0001-accept-qualified-usa-exheader.patch`
+  acepta hashes extra vía `OOT3D_ACCEPT_EXHEADER_SHA256` y mantiene todas las demás comprobaciones.
