@@ -12,6 +12,7 @@ cmake -S "$root/TriAevum" -B "$build" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$here/aarch64-dArkOS.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
     -DPython3_EXECUTABLE="$root/venv/bin/python" \
+    -DUSE_OPENGLES=ON \
     -DOOT3D_ENABLE_VULKAN_RENDERER=OFF \
     -DTHREE_DS_RECOMP_ENABLE_VULKAN=OFF \
     -DTHREE_DS_RECOMP_ENABLE_NRI=OFF \
@@ -25,7 +26,7 @@ cmake -S "$root/TriAevum" -B "$build" -G Ninja \
     -DOOT3D_WHOLE_AOT_SELECTION="$root/TriAevum/tools/oot3d/native_a32_runtime/whole_aot_functions.json" \
     -DOOT3D_WHOLE_AOT_CODE_BIN="$src/code.bin" \
     -DOOT3D_WHOLE_AOT_EXHEADER="$src/exheader.bin" \
-    -DOOT3D_WHOLE_AOT_MAX_PARALLEL_COMPILES="${AOT_JOBS:-4}"
+    -DOOT3D_WHOLE_AOT_MAX_PARALLEL_COMPILES="${AOT_JOBS:-10}"
 
-time cmake --build "$build" --target oot3d_native_game --parallel "${JOBS:-8}"
+time cmake --build "$build" --target oot3d_native_game --parallel "${JOBS:-11}"
 file "$build/oot3d_native_game"

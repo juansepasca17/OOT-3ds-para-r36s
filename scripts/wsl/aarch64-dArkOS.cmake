@@ -13,3 +13,8 @@ set(ENV{PKG_CONFIG_LIBDIR} /usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgco
 set(CMAKE_C_FLAGS_INIT "-mcpu=cortex-a35")
 set(CMAKE_CXX_FLAGS_INIT "-mcpu=cortex-a35")
 set(CMAKE_CROSSCOMPILING_EMULATOR qemu-aarch64;-L;/usr/aarch64-linux-gnu)
+# Faster iteration: ccache for compiles, mold for the 120 MB final link.
+set(CMAKE_C_COMPILER_LAUNCHER ccache)
+set(CMAKE_CXX_COMPILER_LAUNCHER ccache)
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-fuse-ld=mold")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fuse-ld=mold")

@@ -77,3 +77,29 @@ Hicieron falta tres intentos para arrancar: (1) `/etc/profile.d/SDL_VIDEO.sh` fo
 **Conclusión:** la lógica sola está **2.7× por encima** del presupuesto de 30 fps (≈ 11 fps de techo
 de CPU con este build), en línea con la estimación inicial de 60–80 ms. Siguiente paso posible:
 Fase 2b (flags de compilación → LTO/PGO → cambios al generador AOT).
+
+### Prueba 2 — renderer en la GPU (OpenGL ES 3.2, Mali-G31)
+- Parche 0003: backend PICA habilitado con `USE_OPENGLES` (antes devolvía "requires OpenGL 4.3"),
+  cabecera `#version 320 es` + precisiones, `glDrawBuffers`/`glClearDepthf`, sin logic op ni LOD bias,
+  texturas de sombra R32UI inmutables (`glTexStorage2D`) para `glBindImageTexture`.
+- Validación: 200 frames en qemu + llvmpipe ES 3.2, 19 programas distintos compilan y enlazan.
+- En la consola: `GL=OpenGL ES 3.2 v1.r13p0 renderer=Mali-G31`. Llega a la intro, al menú y al registro
+  de nombre. Imagen correcta en la intro (Campo de Hyrule).
+
+| Métrica | Valor |
+|---|---|
+| Lógica (pre-backend) media | **66.9 ms** (antes 89 ms con llvmpipe compitiendo por CPU) |
+| Frame total, mediana | **93 ms ≈ 10.7 fps** (media 172 ms por compilación de shaders) |
+| Primeros 28 frames | 117 s (compilación de shaders en Mali) |
+| Audio | underruns de ALSA (el juego va por debajo de 30 Hz) |
+
+### Prueba 3 — paralelo + caché de shaders
+- El contexto GLES se entrega al hilo del renderer (`SetWorkerThreadHooks`); `Run` se ejecuta en el
+  worker (`SetRunOnWorker`); ImGui crea sus objetos antes del traspaso.
+- Caché de binarios de programa en `oot3d/shadercache` (`OOT3D_GL_PROGRAM_CACHE`).
+- qemu: paralelo sin caídas; 14 programas en caché reutilizados en la segunda corrida.
+
+### Infraestructura de compilación
+- `.wslconfig`: 10 GB y 12 hilos (Ryzen 5 7535HS, 15 GB). ccache (20 GB) + mold.
+- Lección: no restaurar el repo y re-aplicar parches; reescribe el script de auditoría y fuerza
+  la recompilación de los 256 shards (que dependen de su paso de auditoría).
