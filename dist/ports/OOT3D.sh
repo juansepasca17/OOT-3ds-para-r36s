@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# PRUEBA 7: B (PGO) + A (paralelo corregido) + C (memoria en linea).
+# PRUEBA 8: mediciones de GPU (normal, mediump, sin dibujar) y luego el juego.
 #   1) Medición de ~1 minuto con pantalla negra.
 #   2) Después abre el juego normal: Select+Start para salir.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
@@ -74,26 +74,29 @@ msg() {
 first_run=""
 [ -z "$(ls -A "$GAMEDIR/shadercache" 2>/dev/null)" ] && first_run=" Primera vez: compila shaders, puede tardar."
 
-# 1) Medicion corta en modo PARALELO (logica y dibujo en dos nucleos). Si se traba,
-#    el vigilante lo registra y se corta; el juego abre entonces en modo serie.
-msg "1/2 Probando modo paralelo (1-2 min).$first_run"
-sleep 2
-echo "---- medicion paralelo ----"
-TRIAEVUM_PARALLEL_PRESENTATION=1 OOT3D_HANG_DUMP_SECONDS=30 OOT3D_GL_DEBUG=1   timeout 180 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" --parallel-presentation   --throughput-benchmark --disable-audio   --frames 300 --benchmark-warmup-frames 100   --output "$GAMEDIR/bench_parallel.json"
+# 1) Tres mediciones cortas en paralelo para ubicar el costo de GPU:
+#    normal (+ tiempo de espera de GPU), fragmentos en mediump, y sin dibujar.
+bench() {  # $1 nombre, resto: variables de entorno
+  local name=$1; shift
+  echo "---- medicion $name ----"
+  env "$@" TRIAEVUM_PARALLEL_PRESENTATION=1 OOT3D_HANG_DUMP_SECONDS=30     timeout 240 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" --parallel-presentation     --throughput-benchmark --disable-audio --frames 300 --benchmark-warmup-frames 100     --output "$GAMEDIR/bench_$name.json"
+  echo "exit code $name: $?"
+  [ -f "$GAMEDIR/bench_$name.json" ] && grep -A4 '"frame_times"' "$GAMEDIR/bench_$name.json"
+}
+msg "1/4 Midiendo GPU: normal (1-2 min).$first_run"
+bench normal OOT3D_GL_FINISH_TIMING=1
 code=$?
-echo "exit code paralelo: $code"
-if [ $code -eq 0 ]; then
-  MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_name="paralelo"
-else
-  MODE=(--serial-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=0; mode_name="serie"
-fi
-[ -f "$GAMEDIR/bench_parallel.json" ] && grep -A12 '"frame_times"' "$GAMEDIR/bench_parallel.json"
+msg "2/4 Midiendo GPU: precision media (la primera vez compila shaders)."
+bench mediump OOT3D_GLES_FRAGMENT_PRECISION=mediump OOT3D_GL_FINISH_TIMING=1
+msg "3/4 Midiendo sin dibujar (pantalla negra es normal)."
+bench skipdraw OOT3D_GL_SKIP_DRAWS=1
+MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_name="paralelo"
 # El log se vuelca a la SD cada 10 s: sobrevive aunque se apague la consola.
 ( while sleep 10; do sync; done ) &
 SYNC_PID=$!
 
 # 2) Juego normal. Select+Start cierra el juego.
-msg "2/2 Abriendo el juego en modo $mode_name... (Select+Start: salir)"
+msg "4/4 Abriendo el juego en modo $mode_name... (Select+Start: salir)"
 sleep 2
 echo "---- juego ($mode_name) ----"
 if [ -n "$controlfolder" ]; then
