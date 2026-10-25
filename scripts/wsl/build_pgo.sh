@@ -18,7 +18,7 @@ generate)
     flags="-mcpu=cortex-a35 -fprofile-generate -fprofile-update=prefer-atomic -DOOT3D_PGO_GENERATE"
     ldflags="-fuse-ld=mold -fprofile-generate" ;;
 use)
-    flags="-mcpu=cortex-a35 -fprofile-use -fprofile-partial-training -Wno-missing-profile -Wno-coverage-mismatch"
+    flags="-mcpu=cortex-a35 -fprofile-use -fprofile-correction -fprofile-partial-training -Wno-missing-profile -Wno-coverage-mismatch"
     ldflags="-fuse-ld=mold" ;;
 *) echo "PGO_MODE must be generate or use" >&2; exit 2 ;;
 esac

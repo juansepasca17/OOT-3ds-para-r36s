@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# PRUEBA 5b: juego directo en modo serie, log persistente.
+# PRUEBA 7: B (PGO) + A (paralelo corregido) + C (memoria en linea).
 #   1) Medición de ~1 minuto con pantalla negra.
 #   2) Después abre el juego normal: Select+Start para salir.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
@@ -74,14 +74,26 @@ msg() {
 first_run=""
 [ -z "$(ls -A "$GAMEDIR/shadercache" 2>/dev/null)" ] && first_run=" Primera vez: compila shaders, puede tardar."
 
-# Modo serie (el paralelo se traba en el driver Mali; pendiente de rediseno).
-MODE=(--serial-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=0; mode_name="serie"
+# 1) Medicion corta en modo PARALELO (logica y dibujo en dos nucleos). Si se traba,
+#    el vigilante lo registra y se corta; el juego abre entonces en modo serie.
+msg "1/2 Probando modo paralelo (1-2 min).$first_run"
+sleep 2
+echo "---- medicion paralelo ----"
+TRIAEVUM_PARALLEL_PRESENTATION=1 OOT3D_HANG_DUMP_SECONDS=30 OOT3D_GL_DEBUG=1   timeout 180 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" --parallel-presentation   --throughput-benchmark --disable-audio   --frames 300 --benchmark-warmup-frames 100   --output "$GAMEDIR/bench_parallel.json"
+code=$?
+echo "exit code paralelo: $code"
+if [ $code -eq 0 ]; then
+  MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_name="paralelo"
+else
+  MODE=(--serial-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=0; mode_name="serie"
+fi
+[ -f "$GAMEDIR/bench_parallel.json" ] && grep -A12 '"frame_times"' "$GAMEDIR/bench_parallel.json"
 # El log se vuelca a la SD cada 10 s: sobrevive aunque se apague la consola.
 ( while sleep 10; do sync; done ) &
 SYNC_PID=$!
 
 # 2) Juego normal. Select+Start cierra el juego.
-msg "Abriendo el juego... (Fn o R3: menu, Select+Start: salir)"
+msg "2/2 Abriendo el juego en modo $mode_name... (Select+Start: salir)"
 sleep 2
 echo "---- juego ($mode_name) ----"
 if [ -n "$controlfolder" ]; then
