@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# PGO for the R36S build (GCC). Same build tree for both phases so the .gcda
+# files land next to their objects.
+#   PGO_MODE=generate  instrumented binary; run it on the console with
+#                      GCOV_PREFIX pointing at the SD card.
+#   PGO_MODE=use       optimized binary from the collected profile.
+set -euo pipefail
+root=/root/oot3d
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+build=${BUILD_DIR:-$root/work/build-pgo}
+mode=${PGO_MODE:?generate or use}
+src=$(ls -d "$root"/work/gamedata/sources/* | head -n1)
+program=$(ls "$root"/work/aot-cache/*/aot_program.json | head -n1)
+export OOT3D_ACCEPT_EXHEADER_SHA256=dbe5fa0174d73bffb75d7cf0fbaa05d3e0ee080df0e257afc58b6c45ae5de3d0
+
+case $mode in
+generate)
+    flags="-mcpu=cortex-a35 -fprofile-generate -fprofile-update=prefer-atomic -DOOT3D_PGO_GENERATE"
+    ldflags="-fuse-ld=mold -fprofile-generate" ;;
+use)
+    flags="-mcpu=cortex-a35 -fprofile-use -fprofile-partial-training -Wno-missing-profile -Wno-coverage-mismatch"
+    ldflags="-fuse-ld=mold" ;;
+*) echo "PGO_MODE must be generate or use" >&2; exit 2 ;;
+esac
+
+cmake -S "$root/TriAevum" -B "$build" -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE="$here/aarch64-dArkOS.cmake" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS="$flags" -DCMAKE_CXX_FLAGS="$flags" \
+    -DCMAKE_EXE_LINKER_FLAGS="$ldflags" \
+    -DPython3_EXECUTABLE="$root/venv/bin/python" \
+    -DUSE_OPENGLES=ON \
+    -DOOT3D_ENABLE_VULKAN_RENDERER=OFF \
+    -DTHREE_DS_RECOMP_ENABLE_VULKAN=OFF \
+    -DTHREE_DS_RECOMP_ENABLE_NRI=OFF \
+    -DTHREE_DS_RECOMP_ENABLE_SSSR=OFF \
+    -DOOT3D_WHOLE_AOT_PRODUCT_MODE=ON \
+    -DOOT3D_REQUIRE_WHOLE_AOT=ON \
+    -DOOT3D_REBUILD_WHOLE_AOT=ON \
+    -DOOT3D_REGENERATE_WHOLE_AOT=OFF \
+    -DOOT3D_WHOLE_AOT_GENERATED_DIR="$root/work/aot-cpp" \
+    -DOOT3D_WHOLE_AOT_PROGRAM="$program" \
+    -DOOT3D_WHOLE_AOT_SELECTION="$root/TriAevum/tools/oot3d/native_a32_runtime/whole_aot_functions.json" \
+    -DOOT3D_WHOLE_AOT_CODE_BIN="$src/code.bin" \
+    -DOOT3D_WHOLE_AOT_EXHEADER="$src/exheader.bin" \
+    -DOOT3D_WHOLE_AOT_MAX_PARALLEL_COMPILES="${AOT_JOBS:-10}"
+
+time cmake --build "$build" --target oot3d_native_game --parallel "${JOBS:-11}"
+file "$build/oot3d_native_game"

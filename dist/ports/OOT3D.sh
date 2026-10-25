@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# PRUEBA 5: modo paralelo con vigilante; si se traba, el juego abre en modo serie.
+# PRUEBA 5b: juego directo en modo serie, log persistente.
 #   1) Medición de ~1 minuto con pantalla negra.
 #   2) Después abre el juego normal: Select+Start para salir.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
@@ -74,24 +74,14 @@ msg() {
 first_run=""
 [ -z "$(ls -A "$GAMEDIR/shadercache" 2>/dev/null)" ] && first_run=" Primera vez: compila shaders, puede tardar."
 
-# 1) Medicion en modo PARALELO (logica y dibujo en dos nucleos). Si se traba, el
-#    vigilante escribe en el log que hacia cada hilo y se corta a los 2.5 minutos.
-msg "1/2 Midiendo rendimiento en modo paralelo (unos minutos).$first_run"
-sleep 2
-echo "---- medicion GPU paralelo ----"
-TRIAEVUM_PARALLEL_PRESENTATION=1 OOT3D_RENDER_TRACE=1 OOT3D_HANG_DUMP_SECONDS=30 OOT3D_GL_DEBUG=1   timeout 150 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" --parallel-presentation   --throughput-benchmark --disable-audio   --frames 450 --benchmark-warmup-frames 150   --output "$GAMEDIR/bench_parallel.json"
-code=$?
-echo "exit code paralelo: $code"
-[ $code -eq 124 ] && echo "PARALELO CORTADO POR TIEMPO (2.5 min)"
-if [ $code -eq 0 ]; then
-  MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_name="paralelo"
-else
-  MODE=(--serial-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=0; mode_name="serie"
-fi
-[ -f "$GAMEDIR/bench_parallel.json" ] && grep -A12 '"frame_times"' "$GAMEDIR/bench_parallel.json"
+# Modo serie (el paralelo se traba en el driver Mali; pendiente de rediseno).
+MODE=(--serial-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=0; mode_name="serie"
+# El log se vuelca a la SD cada 10 s: sobrevive aunque se apague la consola.
+( while sleep 10; do sync; done ) &
+SYNC_PID=$!
 
 # 2) Juego normal. Select+Start cierra el juego.
-msg "2/2 Abriendo el juego en modo $mode_name... (Fn o R3: menu, Select+Start: salir)"
+msg "Abriendo el juego... (Fn o R3: menu, Select+Start: salir)"
 sleep 2
 echo "---- juego ($mode_name) ----"
 if [ -n "$controlfolder" ]; then
@@ -103,6 +93,7 @@ echo "exit code juego: $?"
 
 [ -n "$OLD_CPU_GOV" ] && echo "$OLD_CPU_GOV" | $ESUDO tee "$CPU_GOV" >/dev/null 2>&1
 [ -n "$OLD_GPU_GOV" ] && echo "$OLD_GPU_GOV" | $ESUDO tee "$GPU_GOV" >/dev/null 2>&1
+kill $SYNC_PID 2>/dev/null
 echo "== fin $(date) =="
 sync
 [ -n "$controlfolder" ] && pm_finish
