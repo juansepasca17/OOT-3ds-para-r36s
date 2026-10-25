@@ -43,11 +43,14 @@ export SDL_VIDEODRIVER=offscreen
 export SDL_AUDIODRIVER=dummy
 export __EGL_VENDOR_LIBRARY_FILENAMES="$GAMEDIR/libs/egl_vendor.d/50_mesa.json"
 export LIBGL_DRIVERS_PATH="$GAMEDIR/libs/dri"
+export EGL_PLATFORM=surfaceless
 export GALLIUM_DRIVER=llvmpipe
 export LIBGL_ALWAYS_SOFTWARE=1
 export LP_NUM_THREADS=2
 export MESA_GL_VERSION_OVERRIDE=4.5
 export MESA_GLSL_VERSION_OVERRIDE=450
+# El contexto GL vive en el hilo principal: presentación en serie.
+export TRIAEVUM_PARALLEL_PRESENTATION=0
 
 run_bench() {
   local name=$1; shift
@@ -67,7 +70,7 @@ run_bench() {
     --renderer opengl \
     --gameplay-timing native30_no_interpolation \
     --throughput-benchmark \
-    --disable-audio \
+    --disable-audio --serial-presentation \
     --width 400 --height 240 \
     --output "$GAMEDIR/bench_$name.json" "$@"
   echo "exit code: $?"

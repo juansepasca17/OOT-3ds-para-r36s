@@ -66,4 +66,37 @@ cat > "$out/libs/egl_vendor.d/50_mesa.json" <<'EOF'
 { "file_format_version" : "1.0.0", "ICD" : { "library_path" : "libEGL_mesa.so.0" } }
 EOF
 
-du -sh "$out"; ls -la "$out" "$out/libs" | head -60
+# Keep only libraries the binary (and Mesa) actually load, under their SONAME.
+declare -A keep
+queue=("$out/oot3d_r36s" "$out/libs/libEGL_mesa.so.0" "$out"/libs/libgallium-*.so "$out"/libs/dri/*.so)
+for k in libEGL_mesa.so.0 libEGL.so.1 libGL.so.1 libGLX.so.0 libGLX_mesa.so.0 libGLdispatch.so.0 libOpenGL.so.0; do keep[$k]=1; queue+=("$out/libs/$k"); done
+for g in "$out"/libs/libgallium-*.so; do keep[$(basename "$g")]=1; done
+while ((${#queue[@]})); do
+    f=${queue[0]}; queue=("${queue[@]:1}")
+    [ -f "$f" ] || continue
+    for need in $(aarch64-linux-gnu-readelf -d "$f" 2>/dev/null | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p'); do
+        [[ -n ${keep[$need]:-} ]] && continue
+        if [ -f "$out/libs/$need" ]; then keep[$need]=1; queue+=("$out/libs/$need"); fi
+    done
+done
+for f in "$out"/libs/*.so*; do
+    [[ -n ${keep[$(basename "$f")]:-} ]] || rm -f "$f"
+done
+
+# Bundle the remaining dependency closure; dArkOS (trixie) already provides the core runtime.
+core='^(ld-linux-aarch64\.so\.1|libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|libstdc\+\+\.so\.6|libpthread\.so\.0|libdl\.so\.2|librt\.so\.1)$'
+while :; do
+    added=0
+    for f in "$out/oot3d_r36s" "$out"/libs/*.so* "$out"/libs/dri/*.so; do
+        for need in $(aarch64-linux-gnu-readelf -d "$f" 2>/dev/null | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p'); do
+            [[ $need =~ $core ]] && continue
+            [ -e "$out/libs/$need" ] && continue
+            found=$(find "$lib" -name "$need" 2>/dev/null | head -n1)
+            if [ -n "$found" ]; then cp -L "$found" "$out/libs/"; added=1
+            else echo "WARNING: $need not found in sysroot"; fi
+        done
+    done
+    ((added)) || break
+done
+
+du -sh "$out" "$out/libs"; ls "$out/libs" "$out/libs/dri"
