@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# PRUEBA 3: GPU + lógica/dibujo en paralelo + caché de shaders.
+# PRUEBA 4: GPU en modo serie + cache de shaders + mensajes en pantalla.
 #   1) Medición de ~1 minuto con pantalla negra.
 #   2) Después abre el juego normal: Select+Start para salir.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
@@ -25,7 +25,7 @@ ESUDO=${ESUDO:-sudo}
 GAMEDIR="$(cd "$(dirname "$0")/oot3d" && pwd)"
 cd "$GAMEDIR" || exit 1
 > "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
-echo "== OOT3D prueba 3 $(date) =="
+echo "== OOT3D prueba 4 $(date) =="
 
 if [ ! -f "$GAMEDIR/game/oot3d_native_process_manifest.json" ]; then
   echo "Faltan los datos del juego en $GAMEDIR/game/"
@@ -45,8 +45,8 @@ free -m
 # GPU real: SDL del sistema (KMSDRM) + EGL/GLES de Mali. Solo libs propias del juego en libs/.
 export LD_LIBRARY_PATH="$GAMEDIR/libs:$LD_LIBRARY_PATH"
 export SDL_GAMECONTROLLERCONFIG="${sdl_controllerconfig:-$SDL_GAMECONTROLLERCONFIG}"
-# Lógica y dibujo en paralelo (el contexto GLES vive en el hilo del renderer).
-export TRIAEVUM_PARALLEL_PRESENTATION=1
+# Modo serie: el paralelo se trabó con el driver de Mali (prueba 3).
+export TRIAEVUM_PARALLEL_PRESENTATION=0
 # Shaders compilados guardados: la compilación lenta ocurre una sola vez.
 mkdir -p "$GAMEDIR/shadercache"
 export OOT3D_GL_PROGRAM_CACHE="$GAMEDIR/shadercache"
@@ -65,21 +65,35 @@ COMMON=(
   --quick-state "$GAMEDIR/savedata/quick.oot3dsav"
   --renderer opengl
   --gameplay-timing native30_no_interpolation
-  --parallel-presentation
+  --serial-presentation
   --width 640 --height 480
 )
 
-# 1) Medición: intro del título con la GPU, sin límite de velocidad.
+# Mensajes en la pantalla de texto (se ven antes de que el juego tome la pantalla).
+msg() {
+  printf '\033c\n\n  Ocarina of Time 3D - R36S\n\n  %s\n' "$1" | $ESUDO tee /dev/tty1 >/dev/null 2>&1
+  echo "[msg] $1"
+}
+first_run=""
+[ -z "$(ls -A "$GAMEDIR/shadercache" 2>/dev/null)" ] && first_run=" Primera vez: compila shaders, puede tardar."
+
+# 1) Medición: intro del título con la GPU, sin límite de velocidad. Máximo 7 minutos.
+msg "1/2 Midiendo rendimiento (unos minutos).$first_run"
+sleep 2
 echo "---- medición GPU ----"
-OOT3D_GL_DEBUG=1 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" \
+OOT3D_GL_DEBUG=1 timeout 420 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" \
   --throughput-benchmark --disable-audio \
-  --frames 600 --benchmark-warmup-frames 300 \
+  --frames 450 --benchmark-warmup-frames 150 \
   --output "$GAMEDIR/bench_gpu.json"
-echo "exit code: $?"
+code=$?
+echo "exit code: $code"
+[ $code -eq 124 ] && echo "MEDICION CORTADA POR TIEMPO (7 min)"
 [ -f "$GAMEDIR/bench_gpu.json" ] && grep -A12 '"frame_times"' "$GAMEDIR/bench_gpu.json" && \
   grep -A6 '"pre_backend_cpu"' "$GAMEDIR/bench_gpu.json"
 
 # 2) Juego normal. Select+Start cierra el juego.
+msg "2/2 Abriendo el juego... (Select+Start para salir)"
+sleep 2
 echo "---- juego ----"
 if [ -n "$controlfolder" ]; then
   $GPTOKEYB "oot3d_r36s" &
