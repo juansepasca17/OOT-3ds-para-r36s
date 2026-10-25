@@ -1,6 +1,6 @@
 # Plan — OoT3D (TriAevum) en R36S / dArkOS RE
 
-Estado: **Fase 0 en curso** · Última actualización: 2026-10-25
+Estado: **v1.0 entregada (~7.75 fps); siguiente: fase D y renderer** · Última actualización: 2026-10-25
 
 ## Estructura de la carpeta
 
@@ -81,7 +81,9 @@ OOT 3ds/
 - Ciclo de prueba: tú corres el port y me pasas `log.txt` y las métricas.
 - Prueba de 30 minutos en las tres zonas, y medición de memoria (RSS) y temperatura.
 
-### Fase 7 — Limpieza final (pedida por ti)
+### Fase 7 — Limpieza final (pedida por ti) — EN ESPERA
+- 2026-10-25: v1.0 entregada (~7.75 fps). Decidiste **mantener el entorno** (WSL, repos, compilaciones,
+  perfil PGO) para seguir con la fase D y el renderer en otra sesión.
 - Antes de borrar nada: todo el trabajo tiene que estar **subido a GitHub**, y **pauso para que
   pruebes el port en tu R36S**. Solo borro cuando me confirmes que funciona.
 - Con tu confirmación: desinstalar la distro WSL Debian (`wsl --unregister Debian`),
