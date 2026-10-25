@@ -75,14 +75,14 @@ first_run=""
 [ -z "$(ls -A "$GAMEDIR/shadercache" 2>/dev/null)" ] && first_run=" Primera vez: compila shaders, puede tardar."
 
 # 1) Medicion en modo PARALELO (logica y dibujo en dos nucleos). Si se traba, el
-#    vigilante escribe en el log que hacia cada hilo y se corta a los 5 minutos.
+#    vigilante escribe en el log que hacia cada hilo y se corta a los 2.5 minutos.
 msg "1/2 Midiendo rendimiento en modo paralelo (unos minutos).$first_run"
 sleep 2
 echo "---- medicion GPU paralelo ----"
-TRIAEVUM_PARALLEL_PRESENTATION=1 OOT3D_HANG_DUMP_SECONDS=45 OOT3D_GL_DEBUG=1   timeout 300 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" --parallel-presentation   --throughput-benchmark --disable-audio   --frames 450 --benchmark-warmup-frames 150   --output "$GAMEDIR/bench_parallel.json"
+TRIAEVUM_PARALLEL_PRESENTATION=1 OOT3D_RENDER_TRACE=1 OOT3D_HANG_DUMP_SECONDS=30 OOT3D_GL_DEBUG=1   timeout 150 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" --parallel-presentation   --throughput-benchmark --disable-audio   --frames 450 --benchmark-warmup-frames 150   --output "$GAMEDIR/bench_parallel.json"
 code=$?
 echo "exit code paralelo: $code"
-[ $code -eq 124 ] && echo "PARALELO CORTADO POR TIEMPO (5 min)"
+[ $code -eq 124 ] && echo "PARALELO CORTADO POR TIEMPO (2.5 min)"
 if [ $code -eq 0 ]; then
   MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_name="paralelo"
 else

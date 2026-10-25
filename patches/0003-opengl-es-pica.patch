@@ -3993,10 +3993,10 @@ index b6cfcee..d3c1f5e 100644
    std::optional<GuiRendererRoutingReset> guiRendererRoutingReset;
  };
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_setup.cpp b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_setup.cpp
-index 81150d8..3322304 100644
+index 81150d8..5cf2462 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_setup.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_setup.cpp
-@@ -6,6 +6,75 @@
+@@ -6,6 +6,91 @@
  #include "oot3d/renderer/azahar_texture_pack.h"
  
  #include <stb_image.h>
@@ -4010,7 +4010,9 @@ index 81150d8..3322304 100644
 +#include <atomic>
 +#include <chrono>
 +#include <cstdlib>
++#include <cstring>
 +#include <dirent.h>
++#include <pthread.h>
 +#include <execinfo.h>
 +#include <signal.h>
 +#include <sys/syscall.h>
@@ -4037,6 +4039,20 @@ index 81150d8..3322304 100644
 +    while (const dirent *entry = readdir(tasks)) {
 +      const long tid = std::strtol(entry->d_name, nullptr, 10);
 +      if (tid <= 0) continue;
++      // Name, scheduler state and kernel wait channel: a thread blocked in a
++      // driver (state D) cannot run the backtrace handler.
++      char path[96], name[64] = "?", wchan[96] = "?", state = '?';
++      snprintf(path, sizeof path, "/proc/self/task/%ld/comm", tid);
++      if (FILE *f = fopen(path, "r")) { if (fgets(name, sizeof name, f)) name[strcspn(name, "\n")] = 0; fclose(f); }
++      snprintf(path, sizeof path, "/proc/self/task/%ld/wchan", tid);
++      if (FILE *f = fopen(path, "r")) { if (!fgets(wchan, sizeof wchan, f)) wchan[0] = 0; fclose(f); }
++      snprintf(path, sizeof path, "/proc/self/task/%ld/stat", tid);
++      if (FILE *f = fopen(path, "r")) {
++        char line[512];
++        if (fgets(line, sizeof line, f)) { if (const char *close = strrchr(line, ')')) state = close[2]; }
++        fclose(f);
++      }
++      fprintf(stderr, "[hang] task %ld name=%s state=%c wchan=%s\n", tid, name, state, wchan);
 +      syscall(SYS_tgkill, getpid(), tid, SIGUSR2);
 +      std::this_thread::sleep_for(std::chrono::milliseconds(50));
 +    }
@@ -4072,7 +4088,7 @@ index 81150d8..3322304 100644
  
  namespace Oot3dA32Window {
  
-@@ -1351,6 +1420,23 @@ void NativeA32WindowSession::Setup() {
+@@ -1351,6 +1436,28 @@ void NativeA32WindowSession::Setup() {
            : launch.ParallelPresentation;
    fast3dGui = dynamic_cast<Fast::Fast3dGui*>(gui.get());
    if (parallelPresentation) {
@@ -4086,7 +4102,12 @@ index 81150d8..3322304 100644
 +      if (fast3dGui != nullptr) ImGui_ImplOpenGL3_CreateDeviceObjects();
 +      SDL_GL_MakeCurrent(glWindow, nullptr);
 +      renderStream.SetWorkerThreadHooks(
-+          [glWindow, glContext] { SDL_GL_MakeCurrent(glWindow, glContext); },
++          [glWindow, glContext] {
++            pthread_setname_np(pthread_self(), "oot3d-render");
++            const int result = SDL_GL_MakeCurrent(glWindow, glContext);
++            fprintf(stderr, "[gl] render worker MakeCurrent=%d %s\n", result,
++                    result == 0 ? "" : SDL_GetError());
++          },
 +          [glWindow] { SDL_GL_MakeCurrent(glWindow, nullptr); });
 +      renderStream.SetRunOnWorker(true);
 +      glSessionWindow = glWindow;
@@ -4096,7 +4117,7 @@ index 81150d8..3322304 100644
      // Renderer timings accumulate apart and merge once the stream drains.
      rendererTiming = &workerPhaseTiming;
      renderStream.SetMode(
-@@ -1367,6 +1453,9 @@ void NativeA32WindowSession::Setup() {
+@@ -1367,6 +1474,9 @@ void NativeA32WindowSession::Setup() {
    }
    // The routing refers to this loop's stream: removed on every exit.
    guiRendererRoutingReset.emplace(parallelPresentation ? fast3dGui : nullptr);
@@ -4107,10 +4128,18 @@ index 81150d8..3322304 100644
  #if defined(__SWITCH__)
    WriteSwitchBootStage("runtime_loop");
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.cpp b/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.cpp
-index 29e449f..c012c49 100644
+index 29e449f..5092899 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.cpp
-@@ -82,7 +82,21 @@ void NativeRenderCommandStream::Enqueue(Command command, bool endsFrame,
+@@ -1,5 +1,7 @@
+ #include "oot3d_native_render_command_stream.h"
+ 
++#include <cstdio>
++#include <cstdlib>
+ #include <stdexcept>
+ #include <utility>
+ 
+@@ -82,7 +84,21 @@ void NativeRenderCommandStream::Enqueue(Command command, bool endsFrame,
      mWork.notify_one();
  }
  
@@ -4132,7 +4161,7 @@ index 29e449f..c012c49 100644
      Drain();
      {
          CommandScope scope(true);
-@@ -140,10 +154,15 @@ void NativeRenderCommandStream::StopWorker() {
+@@ -140,21 +156,38 @@ void NativeRenderCommandStream::StopWorker() {
  }
  
  void NativeRenderCommandStream::WorkerLoop() {
@@ -4149,6 +4178,29 @@ index 29e449f..c012c49 100644
          Entry entry = std::move(mQueue.front());
          mQueue.pop_front();
          mBusy = true;
+         lock.unlock();
+         std::exception_ptr failure;
++        static const bool trace = std::getenv("OOT3D_RENDER_TRACE") != nullptr;
++        static unsigned traced = 0U;
++        const bool traceThis = trace && traced < 80U;
++        if (traceThis) {
++            std::fprintf(stderr, "[rs] #%u start sync=%d frame=%d\n", traced,
++                         entry.Synchronous ? 1 : 0, entry.EndsFrame ? 1 : 0);
++            std::fflush(stderr);
++        }
+         try {
+             CommandScope scope(entry.Synchronous);
+             entry.Work();
+         } catch (...) {
+             failure = std::current_exception();
+         }
++        if (traceThis) {
++            std::fprintf(stderr, "[rs] #%u done\n", traced++);
++            std::fflush(stderr);
++        }
+         lock.lock();
+         mBusy = false;
+         if (entry.EndsFrame && mFramesQueued != 0U) --mFramesQueued;
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.h b/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.h
 index 080be30..2e9cae5 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.h
