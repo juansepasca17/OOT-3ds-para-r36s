@@ -80,7 +80,9 @@ OOT 3ds/
 - Prueba de 30 minutos en las tres zonas, y medición de memoria (RSS) y temperatura.
 
 ### Fase 7 — Limpieza final (pedida por ti)
-- Cuando el port esté entregado y probado: desinstalar la distro WSL Debian (`wsl --unregister Debian`),
+- Antes de borrar nada: todo el trabajo tiene que estar **subido a GitHub**, y **pauso para que
+  pruebes el port en tu R36S**. Solo borro cuando me confirmes que funciona.
+- Con tu confirmación: desinstalar la distro WSL Debian (`wsl --unregister Debian`),
   borrar `repos/`, `deps/`, `work/`, `scripts/`, los documentos de trabajo y la ROM extraída.
 - En el PC queda **solo** `dist/ports/oot3d/` (el juego) y `dist/ports/OOT3D.sh`.
 
