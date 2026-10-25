@@ -59,6 +59,8 @@ OOT 3ds/
 - Reducir llamadas al driver: buffers persistentes, uniforms agrupados, menos cambios de estado.
 
 ### Fase 4 — Una pantalla, modo cartoon, controles y menú
+- **Idioma español por defecto** (`config/game_language.json`): la ROM USA trae inglés, francés y
+  español, y TriAevum los detecta en la RomFS. También se puede cambiar desde el menú.
 - Perfil `topscreen` + atlas SingleScreen 3.0 (ya incluido en el repo) y gameplay a 30 Hz sin interpolación.
 - **Toon Lite**: luz cuantizada en el shader de fragmentos más contorno por bordes de profundidad
   a resolución interna. Se puede activar o desactivar.
