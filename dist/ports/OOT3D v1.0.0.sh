@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# Version 1.0 (2026-10-25): PGO + paralelo + memoria en linea + ring de uniforms.
+# Version 1.0.0 (2026-10-25): PGO + paralelo + memoria en linea + ring de uniforms.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
