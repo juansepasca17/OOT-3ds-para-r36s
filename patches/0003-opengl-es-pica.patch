@@ -3993,10 +3993,10 @@ index b6cfcee..d3c1f5e 100644
    std::optional<GuiRendererRoutingReset> guiRendererRoutingReset;
  };
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_setup.cpp b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_setup.cpp
-index 81150d8..5b6acd2 100644
+index 81150d8..3322304 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_setup.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_setup.cpp
-@@ -6,6 +6,12 @@
+@@ -6,6 +6,75 @@
  #include "oot3d/renderer/azahar_texture_pack.h"
  
  #include <stb_image.h>
@@ -4006,10 +4006,73 @@ index 81150d8..5b6acd2 100644
 +// context hand-off below.
 +bool ImGui_ImplOpenGL3_CreateDeviceObjects();
 +#endif
++#if defined(__linux__)
++#include <atomic>
++#include <chrono>
++#include <cstdlib>
++#include <dirent.h>
++#include <execinfo.h>
++#include <signal.h>
++#include <sys/syscall.h>
++#include <thread>
++#include <unistd.h>
++
++namespace {
++// Hang diagnostics (OOT3D_HANG_DUMP_SECONDS): when the render stream stops
++// executing commands for that long, every thread writes its backtrace to
++// stderr so a device-only deadlock can be located offline with addr2line.
++void WriteThreadBacktrace(int) {
++  void *frames[48];
++  const int count = backtrace(frames, 48);
++  char header[64];
++  const int length = snprintf(header, sizeof header, "[hang] thread %ld:\n",
++                              static_cast<long>(syscall(SYS_gettid)));
++  if (length > 0) (void)!write(STDERR_FILENO, header, static_cast<size_t>(length));
++  backtrace_symbols_fd(frames, count, STDERR_FILENO);
++}
++
++void DumpAllThreadBacktraces() {
++  signal(SIGUSR2, WriteThreadBacktrace);
++  if (DIR *tasks = opendir("/proc/self/task"); tasks != nullptr) {
++    while (const dirent *entry = readdir(tasks)) {
++      const long tid = std::strtol(entry->d_name, nullptr, 10);
++      if (tid <= 0) continue;
++      syscall(SYS_tgkill, getpid(), tid, SIGUSR2);
++      std::this_thread::sleep_for(std::chrono::milliseconds(50));
++    }
++    closedir(tasks);
++  }
++}
++
++void StartRenderStreamWatchdog(const Oot3dNativeGame::NativeRenderCommandStream &stream) {
++  const char *value = std::getenv("OOT3D_HANG_DUMP_SECONDS");
++  const int seconds = value != nullptr ? std::atoi(value) : 0;
++  if (seconds <= 0) return;
++  std::thread([&stream, seconds] {
++    uint64_t last = stream.ExecutedCommands();
++    int stalled = 0;
++    int dumps = 0;
++    while (dumps < 2) {
++      std::this_thread::sleep_for(std::chrono::seconds(1));
++      const uint64_t now = stream.ExecutedCommands();
++      stalled = now == last ? stalled + 1 : 0;
++      last = now;
++      if (stalled >= seconds) {
++        fprintf(stderr, "[hang] render stream stalled %d s at %llu commands\n", stalled,
++                static_cast<unsigned long long>(now));
++        DumpAllThreadBacktraces();
++        stalled = 0;
++        ++dumps;
++      }
++    }
++  }).detach();
++}
++} // namespace
++#endif
  
  namespace Oot3dA32Window {
  
-@@ -1351,6 +1357,23 @@ void NativeA32WindowSession::Setup() {
+@@ -1351,6 +1420,23 @@ void NativeA32WindowSession::Setup() {
            : launch.ParallelPresentation;
    fast3dGui = dynamic_cast<Fast::Fast3dGui*>(gui.get());
    if (parallelPresentation) {
@@ -4033,6 +4096,16 @@ index 81150d8..5b6acd2 100644
      // Renderer timings accumulate apart and merge once the stream drains.
      rendererTiming = &workerPhaseTiming;
      renderStream.SetMode(
+@@ -1367,6 +1453,9 @@ void NativeA32WindowSession::Setup() {
+   }
+   // The routing refers to this loop's stream: removed on every exit.
+   guiRendererRoutingReset.emplace(parallelPresentation ? fast3dGui : nullptr);
++#if defined(__linux__)
++  StartRenderStreamWatchdog(renderStream);
++#endif
+ 
+ #if defined(__SWITCH__)
+   WriteSwitchBootStage("runtime_loop");
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.cpp b/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.cpp
 index 29e449f..c012c49 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_render_command_stream.cpp
