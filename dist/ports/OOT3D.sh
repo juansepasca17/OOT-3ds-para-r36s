@@ -80,12 +80,21 @@ run_bench() {
     --disable-audio --serial-presentation \
     --width 400 --height 240 \
     --output "$GAMEDIR/bench_$name.json" "$@"
-  echo "exit code: $?"
+  local code=$?
+  echo "exit code: $code"
   [ -f "$GAMEDIR/bench_$name.json" ] && cat "$GAMEDIR/bench_$name.json"
+  return $code
 }
 
-# Arranque + intro del título (Link cabalgando por el Campo de Hyrule).
-run_bench intro --frames 900 --benchmark-warmup-frames 300
+# Mesa lista primero los dispositivos de hardware (GPU Rockchip) y al final el de
+# software (llvmpipe). Se prueba cada índice: un fallo de inicio tarda segundos.
+for dev in 1 2 3 0; do
+  export SDL_HINT_EGL_DEVICE=$dev
+  echo "== probando dispositivo EGL $dev =="
+  started=$(date +%s)
+  run_bench intro --frames 900 --benchmark-warmup-frames 300 && break
+  [ $(( $(date +%s) - started )) -gt 60 ] && break   # ya estaba corriendo: no reintentar
+done
 
 [ -n "$OLD_CPU_GOV" ] && echo "$OLD_CPU_GOV" | $ESUDO tee "$CPU_GOV" >/dev/null 2>&1
 echo "== fin $(date) =="
