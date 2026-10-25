@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# PRUEBA 2: renderer en la GPU (OpenGL ES 3.2 sobre Mali-G31).
+# PRUEBA 3: GPU + lógica/dibujo en paralelo + caché de shaders.
 #   1) Medición de ~1 minuto con pantalla negra.
 #   2) Después abre el juego normal: Select+Start para salir.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
@@ -25,7 +25,7 @@ ESUDO=${ESUDO:-sudo}
 GAMEDIR="$(cd "$(dirname "$0")/oot3d" && pwd)"
 cd "$GAMEDIR" || exit 1
 > "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
-echo "== OOT3D prueba 2 (GPU) $(date) =="
+echo "== OOT3D prueba 3 $(date) =="
 
 if [ ! -f "$GAMEDIR/game/oot3d_native_process_manifest.json" ]; then
   echo "Faltan los datos del juego en $GAMEDIR/game/"
@@ -45,7 +45,11 @@ free -m
 # GPU real: SDL del sistema (KMSDRM) + EGL/GLES de Mali. Solo libs propias del juego en libs/.
 export LD_LIBRARY_PATH="$GAMEDIR/libs:$LD_LIBRARY_PATH"
 export SDL_GAMECONTROLLERCONFIG="${sdl_controllerconfig:-$SDL_GAMECONTROLLERCONFIG}"
-export TRIAEVUM_PARALLEL_PRESENTATION=0
+# Lógica y dibujo en paralelo (el contexto GLES vive en el hilo del renderer).
+export TRIAEVUM_PARALLEL_PRESENTATION=1
+# Shaders compilados guardados: la compilación lenta ocurre una sola vez.
+mkdir -p "$GAMEDIR/shadercache"
+export OOT3D_GL_PROGRAM_CACHE="$GAMEDIR/shadercache"
 echo "-- entorno gráfico --"
 env | grep -E '^(SDL_VIDEO|EGL|LD_LIBRARY)' | sort
 
@@ -61,7 +65,7 @@ COMMON=(
   --quick-state "$GAMEDIR/savedata/quick.oot3dsav"
   --renderer opengl
   --gameplay-timing native30_no_interpolation
-  --serial-presentation
+  --parallel-presentation
   --width 640 --height 480
 )
 
