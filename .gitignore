@@ -32,3 +32,6 @@ dist/ports/oot3d/
 log.txt
 venv/
 __pycache__/
+
+# Guia personal (datos de mi consola y mi PC)
+GUIA_PORTEO_R36S_PERSONAL.md

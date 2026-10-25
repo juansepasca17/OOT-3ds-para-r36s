@@ -25,6 +25,8 @@ con el renderer portado a **OpenGL ES 3.2**.
 | Límite si no se dibujara nada | 75 ms (~13 fps) |
 
 El detalle de cada prueba está en [docs/BITACORA.md](docs/BITACORA.md); el plan, en [PLAN.md](PLAN.md).
+Para portar **otros** juegos a la R36S con ayuda de una IA: [GUIA_PORTEO_R36S.md](GUIA_PORTEO_R36S.md)
+y el script de diagnóstico [r36s_info.sh](r36s_info.sh).
 
 ## Qué NO contiene este repo
 
