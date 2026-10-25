@@ -1,6 +1,8 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# FASE ACTUAL: prueba de rendimiento de CPU (sin imagen). Corre ~1-3 minutos y vuelve al menú.
+# PRUEBA 2: renderer en la GPU (OpenGL ES 3.2 sobre Mali-G31).
+#   1) Medición de ~1 minuto con pantalla negra.
+#   2) Después abre el juego normal: Select+Start para salir.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -23,7 +25,7 @@ ESUDO=${ESUDO:-sudo}
 GAMEDIR="$(cd "$(dirname "$0")/oot3d" && pwd)"
 cd "$GAMEDIR" || exit 1
 > "$GAMEDIR/log.txt" && exec > >(tee "$GAMEDIR/log.txt") 2>&1
-echo "== OOT3D benchmark $(date) =="
+echo "== OOT3D prueba 2 (GPU) $(date) =="
 
 if [ ! -f "$GAMEDIR/game/oot3d_native_process_manifest.json" ]; then
   echo "Faltan los datos del juego en $GAMEDIR/game/"
@@ -32,71 +34,59 @@ fi
 $ESUDO chmod +x "$GAMEDIR/oot3d_r36s"
 
 CPU_GOV=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+GPU_GOV=/sys/devices/platform/ff400000.gpu/devfreq/ff400000.gpu/governor
 OLD_CPU_GOV=$(cat "$CPU_GOV" 2>/dev/null)
+OLD_GPU_GOV=$(cat "$GPU_GOV" 2>/dev/null)
 echo performance | $ESUDO tee "$CPU_GOV" >/dev/null 2>&1
-echo "cpu governor: $(cat $CPU_GOV) freq: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)"
+echo performance | $ESUDO tee "$GPU_GOV" >/dev/null 2>&1
+echo "cpu: $(cat $CPU_GOV) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq)  gpu: $(cat $GPU_GOV 2>/dev/null)"
 free -m
 
-# Sin pantalla: SDL offscreen + OpenGL por software (Mesa llvmpipe) incluidos en libs/.
+# GPU real: SDL del sistema (KMSDRM) + EGL/GLES de Mali. Solo libs propias del juego en libs/.
 export LD_LIBRARY_PATH="$GAMEDIR/libs:$LD_LIBRARY_PATH"
-export SDL_VIDEODRIVER=offscreen
-export SDL_AUDIODRIVER=dummy
-export __EGL_VENDOR_LIBRARY_FILENAMES="$GAMEDIR/libs/egl_vendor.d/50_mesa.json"
-export LIBGL_DRIVERS_PATH="$GAMEDIR/libs/dri"
-export EGL_PLATFORM=surfaceless
-# En dArkOS libEGL.so apunta a libMali: forzar el EGL/GL incluidos.
-export SDL_VIDEO_EGL_DRIVER="$GAMEDIR/libs/libEGL.so.1"
-export SDL_VIDEO_GL_DRIVER="$GAMEDIR/libs/libGL.so.1"
-export GALLIUM_DRIVER=llvmpipe
-export LIBGL_ALWAYS_SOFTWARE=1
-export LP_NUM_THREADS=2
-export MESA_GL_VERSION_OVERRIDE=4.5
-export MESA_GLSL_VERSION_OVERRIDE=450
-# El contexto GL vive en el hilo principal: presentación en serie.
+export SDL_GAMECONTROLLERCONFIG="${sdl_controllerconfig:-$SDL_GAMECONTROLLERCONFIG}"
 export TRIAEVUM_PARALLEL_PRESENTATION=0
-
 echo "-- entorno gráfico --"
-env | grep -E '^(SDL_|EGL|__EGL|LD_LIBRARY|LIBGL|GALLIUM|MESA)' | sort
-grep -rsE 'SDL_|EGL' /etc/environment /etc/profile.d/ 2>/dev/null | head -n 20
+env | grep -E '^(SDL_VIDEO|EGL|LD_LIBRARY)' | sort
 
-run_bench() {
-  local name=$1; shift
-  echo "---- $name ----"
-  local timer=""
-  [ -x /usr/bin/time ] && timer="/usr/bin/time -v"
-  $timer "$GAMEDIR/oot3d_r36s" \
-    --a32-process-manifest "$GAMEDIR/game/oot3d_native_process_manifest.json" \
-    --resource-root "$GAMEDIR/resources.o2r" \
-    --config "$GAMEDIR/config/oot3d_native_game.json" \
-    --controls-config "$GAMEDIR/config/oot3d_controls.json" \
-    --ui-profile topscreen \
-    --topscreen-config "$GAMEDIR/config/topscreen_ui.json" \
-    --topscreen-texture-overrides "$GAMEDIR/config/atlas_overrides.o3tu" \
-    --save-data "$GAMEDIR/savedata" \
-    --quick-state "$GAMEDIR/savedata/quick.oot3dsav" \
-    --renderer opengl \
-    --gameplay-timing native30_no_interpolation \
-    --throughput-benchmark \
-    --disable-audio --serial-presentation \
-    --width 400 --height 240 \
-    --output "$GAMEDIR/bench_$name.json" "$@"
-  local code=$?
-  echo "exit code: $code"
-  [ -f "$GAMEDIR/bench_$name.json" ] && cat "$GAMEDIR/bench_$name.json"
-  return $code
-}
+COMMON=(
+  --a32-process-manifest "$GAMEDIR/game/oot3d_native_process_manifest.json"
+  --resource-root "$GAMEDIR/resources.o2r"
+  --config "$GAMEDIR/config/oot3d_native_game.json"
+  --controls-config "$GAMEDIR/config/oot3d_controls.json"
+  --ui-profile topscreen
+  --topscreen-config "$GAMEDIR/config/topscreen_ui.json"
+  --topscreen-texture-overrides "$GAMEDIR/config/atlas_overrides.o3tu"
+  --save-data "$GAMEDIR/savedata"
+  --quick-state "$GAMEDIR/savedata/quick.oot3dsav"
+  --renderer opengl
+  --gameplay-timing native30_no_interpolation
+  --serial-presentation
+  --width 640 --height 480
+)
 
-# Mesa lista primero los dispositivos de hardware (GPU Rockchip) y al final el de
-# software (llvmpipe). Se prueba cada índice: un fallo de inicio tarda segundos.
-for dev in 1 2 3 0; do
-  export SDL_HINT_EGL_DEVICE=$dev
-  echo "== probando dispositivo EGL $dev =="
-  started=$(date +%s)
-  run_bench intro --frames 900 --benchmark-warmup-frames 300 && break
-  [ $(( $(date +%s) - started )) -gt 60 ] && break   # ya estaba corriendo: no reintentar
-done
+# 1) Medición: intro del título con la GPU, sin límite de velocidad.
+echo "---- medición GPU ----"
+OOT3D_GL_DEBUG=1 "$GAMEDIR/oot3d_r36s" "${COMMON[@]}" \
+  --throughput-benchmark --disable-audio \
+  --frames 600 --benchmark-warmup-frames 300 \
+  --output "$GAMEDIR/bench_gpu.json"
+echo "exit code: $?"
+[ -f "$GAMEDIR/bench_gpu.json" ] && grep -A12 '"frame_times"' "$GAMEDIR/bench_gpu.json" && \
+  grep -A6 '"pre_backend_cpu"' "$GAMEDIR/bench_gpu.json"
+
+# 2) Juego normal. Select+Start cierra el juego.
+echo "---- juego ----"
+if [ -n "$controlfolder" ]; then
+  $GPTOKEYB "oot3d_r36s" &
+  pm_platform_helper "$GAMEDIR/oot3d_r36s" >/dev/null 2>&1
+fi
+"$GAMEDIR/oot3d_r36s" "${COMMON[@]}"
+echo "exit code juego: $?"
 
 [ -n "$OLD_CPU_GOV" ] && echo "$OLD_CPU_GOV" | $ESUDO tee "$CPU_GOV" >/dev/null 2>&1
+[ -n "$OLD_GPU_GOV" ] && echo "$OLD_GPU_GOV" | $ESUDO tee "$GPU_GOV" >/dev/null 2>&1
 echo "== fin $(date) =="
 sync
 [ -n "$controlfolder" ] && pm_finish
+printf "\033c" > /dev/tty1 2>/dev/null

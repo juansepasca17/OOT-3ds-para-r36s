@@ -1,0 +1,364 @@
+diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
+index 6308e40..44b416b 100644
+--- a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
++++ b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
+@@ -11,6 +11,8 @@
+ #include <algorithm>
+ #include <array>
+ #include <cmath>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <map>
+@@ -22,6 +24,33 @@
+ #include <utility>
+ #include <vector>
+ 
++#if defined(USE_OPENGLES)
++// OpenGL ES 3.2 (Mali-G31 on the R36S). The PICA path keeps its desktop call
++// shapes; these map the few entry points ES spells differently.
++#include <GLES3/gl32.h>
++namespace {
++inline void glDrawBuffer(GLenum buffer) { glDrawBuffers(1, &buffer); }
++inline void glClearDepth(double depth) { glClearDepthf(static_cast<GLfloat>(depth)); }
++// Image-bound textures must be immutable in ES.
++inline void PicaGlAllocateR32ui(GLsizei width, GLsizei height, const void* pixels) {
++    glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32UI, width, height);
++    if (pixels != nullptr) {
++        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RED_INTEGER,
++                        GL_UNSIGNED_INT, pixels);
++    }
++}
++} // namespace
++#define OOT3D_PICA_GLSL_VERSION "#version 320 es\nprecision highp float;\nprecision highp int;\n"
++#else
++namespace {
++inline void PicaGlAllocateR32ui(GLsizei width, GLsizei height, const void* pixels) {
++    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, width, height, 0, GL_RED_INTEGER,
++                 GL_UNSIGNED_INT, pixels);
++}
++} // namespace
++#define OOT3D_PICA_GLSL_VERSION "#version 430\n"
++#endif
++
+ namespace Fast {
+ namespace {
+ 
+@@ -31,7 +60,7 @@ void SetPicaGlError(std::string* error, std::string message) {
+     }
+ }
+ 
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+ 
+ uint64_t HashBytes(std::span<const uint8_t> bytes) {
+     uint64_t hash = 1469598103934665603ULL;
+@@ -141,6 +170,36 @@ struct PicaGlGeometryBuffer {
+ };
+ 
+ GLuint CompilePicaGlShader(GLenum stage, std::string_view source) {
++#if defined(USE_OPENGLES)
++    // The shared dialect emits desktop GLSL 4.30; ES 3.2 accepts the same body
++    // once precision is explicit (integer samplers/images have no default).
++    std::string esSource;
++    constexpr std::string_view kDesktopVersion = "#version 430";
++    if (source.starts_with(kDesktopVersion)) {
++        esSource.assign(
++            "#version 320 es\n"
++            "precision highp float;\n"
++            "precision highp int;\n"
++            "precision highp sampler2D;\n"
++            "precision highp usampler2D;\n"
++            "precision highp isampler2D;\n"
++            "precision highp uimage2D;\n"
++            "precision highp sampler2DShadow;\n"
++            "precision highp samplerCube;\n"
++            "precision highp sampler2DArray;\n");
++        esSource.append(source.substr(kDesktopVersion.size()));
++        source = esSource;
++    }
++#endif
++    if (const char* dump = std::getenv("OOT3D_DUMP_PICA_SHADERS"); dump != nullptr) {
++        static unsigned dumpIndex = 0U;
++        const std::string path = std::string(dump) + "/" + std::to_string(dumpIndex++) +
++                                 (stage == GL_VERTEX_SHADER ? ".vert" : ".frag");
++        if (FILE* file = std::fopen(path.c_str(), "wb"); file != nullptr) {
++            std::fwrite(source.data(), 1, source.size(), file);
++            std::fclose(file);
++        }
++    }
+     const GLuint shader = glCreateShader(stage);
+     const GLchar* text = source.data();
+     const GLint length = static_cast<GLint>(source.size());
+@@ -155,10 +214,19 @@ GLuint CompilePicaGlShader(GLenum stage, std::string_view source) {
+     glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
+     std::string log(static_cast<size_t>(std::max(logLength, 1)), '\0');
+     glGetShaderInfoLog(shader, logLength, nullptr, log.data());
++    const GLenum error = glGetError();
+     glDeleteShader(shader);
++    const auto glString = [](GLenum name) {
++        const auto* value = reinterpret_cast<const char*>(glGetString(name));
++        return std::string(value != nullptr ? value : "(null)");
++    };
+     throw std::runtime_error(
+         std::string(stage == GL_VERTEX_SHADER ? "vertex" : "fragment") +
+-        " PICA OpenGL shader failed: " + log);
++        " PICA OpenGL shader failed (shader=" + std::to_string(shader) +
++        " glError=" + std::to_string(error) + " GL=" + glString(GL_VERSION) +
++        " GLSL=" + glString(GL_SHADING_LANGUAGE_VERSION) +
++        " renderer=" + glString(GL_RENDERER) + "): " + log +
++        "\n--- source ---\n" + std::string(source.substr(0, 1500)));
+ }
+ 
+ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
+@@ -251,6 +319,7 @@ GLenum ToPicaGlStencil(GfxNativePicaStencilAction action) {
+     throw std::runtime_error("invalid PICA stencil action");
+ }
+ 
++#if !defined(USE_OPENGLES)
+ GLenum ToPicaGlLogic(GfxNativePicaLogicOperation operation) {
+     switch (operation) {
+         case GfxNativePicaLogicOperation::Clear: return GL_CLEAR;
+@@ -272,6 +341,7 @@ GLenum ToPicaGlLogic(GfxNativePicaLogicOperation operation) {
+     }
+     throw std::runtime_error("invalid PICA logic operation");
+ }
++#endif
+ 
+ GLenum ToPicaGlBlendEquation(GfxNativeBlendEquation equation) {
+     switch (equation) {
+@@ -490,7 +560,7 @@ void DeletePicaDisplay(PicaGlDisplay& display) {
+ 
+ struct GfxRenderingAPIOGL::NativePicaState {
+     std::vector<uint64_t> Completions;
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+     Renderer3ds::PicaCompositionSchedule Composition;
+     std::map<PicaGlShaderKey, PicaGlProgram> Programs;
+     std::map<PicaGlTargetKey, PicaGlTarget> Targets;
+@@ -536,7 +606,7 @@ GfxRenderingAPIOGL::~GfxRenderingAPIOGL() {
+ void GfxRenderingAPIOGL::InitNativePica() {
+     ShutdownNativePica();
+     mNativePica = std::make_unique<NativePicaState>();
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+     auto& state = *mNativePica;
+     state.GeometryCacheEnabled = mNativePicaGeometryCacheEnabled;
+     glGenVertexArrays(1, &state.VertexArray);
+@@ -557,13 +627,12 @@ void GfxRenderingAPIOGL::InitNativePica() {
+     const uint32_t emptyShadow = 0xFFFFFFFFU;
+     glGenTextures(1, &state.FallbackInteger);
+     glBindTexture(GL_TEXTURE_2D, state.FallbackInteger);
+-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, 1, 1, 0, GL_RED_INTEGER,
+-                 GL_UNSIGNED_INT, &emptyShadow);
++    PicaGlAllocateR32ui(1, 1, &emptyShadow);
+     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+     glBindTexture(GL_TEXTURE_2D, 0);
+ 
+-    static constexpr std::string_view kScanoutVertex = R"glsl(#version 430
++    static constexpr std::string_view kScanoutVertex = OOT3D_PICA_GLSL_VERSION R"glsl(
+ out vec2 pica_uv;
+ void main() {
+     const vec2 positions[3] = vec2[3](
+@@ -573,7 +642,7 @@ void main() {
+     pica_uv = position * 0.5 + 0.5;
+ }
+ )glsl";
+-    static constexpr std::string_view kScanoutFragment = R"glsl(#version 430
++    static constexpr std::string_view kScanoutFragment = OOT3D_PICA_GLSL_VERSION R"glsl(
+ layout(binding=0) uniform sampler2D pica_scanout;
+ uniform int pica_flip_y;
+ in vec2 pica_uv;
+@@ -623,7 +692,7 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
+     if (!mNativePica) {
+         return;
+     }
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+     auto& state = *mNativePica;
+     for (auto& [key, program] : state.Programs) {
+         glDeleteProgram(program.Handle);
+@@ -672,7 +741,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
+ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
+     const Renderer3ds::PicaCompositionSequenceView& sequence,
+     std::string* error) {
+-#if defined(USE_OPENGLES) || defined(__APPLE__)
++#if defined(__APPLE__)
+     SetPicaGlError(error, "native PICA requires OpenGL 4.3");
+     return false;
+ #else
+@@ -701,7 +770,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
+ #endif
+ }
+ 
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+ namespace {
+ 
+ void DeletePicaGlGeometry(
+@@ -763,8 +832,8 @@ PicaGlTarget& GetPicaGlTarget(
+ 
+         glGenTextures(1, &target.Shadow);
+         glBindTexture(GL_TEXTURE_2D, target.Shadow);
+-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, key.Width, key.Height, 0,
+-                     GL_RED_INTEGER, GL_UNSIGNED_INT, nullptr);
++        PicaGlAllocateR32ui(static_cast<GLsizei>(key.Width),
++                            static_cast<GLsizei>(key.Height), nullptr);
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+@@ -927,8 +996,10 @@ PicaGlTexture& GetPicaGlTexture(
+             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,
+                             std::min<uint32_t>(texture.MaxMipLevel,
+                                                mipLevels - 1U));
++#if !defined(USE_OPENGLES)
+             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS,
+                             static_cast<float>(texture.LodBiasRaw) / 256.0F);
++#endif
+         }
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
+                         ToPicaGlWrap(texture.NativeWrapS));
+@@ -1083,7 +1154,7 @@ PicaGlDisplay& GetPicaGlDisplay(
+ GfxNativePicaBackendStats
+ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
+     GfxNativePicaBackendStats result;
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+     if (mNativePica != nullptr) {
+         result.Available = true;
+         const auto registry = mNativePica->GeometryRegistry.Stats();
+@@ -1114,7 +1185,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
+ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
+     bool enabled) noexcept {
+     mNativePicaGeometryCacheEnabled = enabled;
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+     if (mNativePica != nullptr) {
+         mNativePica->GeometryCacheEnabled = enabled;
+     }
+@@ -1125,7 +1196,7 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
+ 
+ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+     const GfxNativePicaDrawView& draw, std::string* error) {
+-#if defined(USE_OPENGLES) || defined(__APPLE__)
++#if defined(__APPLE__)
+     SetPicaGlError(error, "native PICA requires OpenGL 4.3");
+     return false;
+ #else
+@@ -1426,7 +1497,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+                            GL_READ_WRITE, GL_R32UI);
+         if (shadowProducer) {
+             glDisable(GL_BLEND);
++#if !defined(USE_OPENGLES)
+             glDisable(GL_COLOR_LOGIC_OP);
++#endif
+             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+         } else {
+             glColorMask((draw.ColorWriteMask & 1U) != 0U,
+@@ -1435,7 +1508,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+                         (draw.ColorWriteMask & 8U) != 0U);
+             if (draw.Blend.Enabled) {
+                 glEnable(GL_BLEND);
+-                glDisable(GL_COLOR_LOGIC_OP);
++    #if !defined(USE_OPENGLES)
++            glDisable(GL_COLOR_LOGIC_OP);
++#endif
+                 glBlendEquationSeparate(
+                     ToPicaGlBlendEquation(draw.Blend.EquationRgb),
+                     ToPicaGlBlendEquation(draw.Blend.EquationAlpha));
+@@ -1450,8 +1525,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+                              draw.Blend.ConstantColor[3]);
+             } else {
+                 glDisable(GL_BLEND);
++#if !defined(USE_OPENGLES)
+                 glEnable(GL_COLOR_LOGIC_OP);
+                 glLogicOp(ToPicaGlLogic(draw.LogicOperation));
++#endif
+             }
+         }
+ 
+@@ -1592,7 +1669,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+     const GfxNativePicaDisplayTransferView& transfer,
+     std::string* error) {
+-#if defined(USE_OPENGLES) || defined(__APPLE__)
++#if defined(__APPLE__)
+     SetPicaGlError(error, "native PICA requires OpenGL 4.3");
+     return false;
+ #else
+@@ -1686,7 +1763,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+             glDisable(GL_STENCIL_TEST);
+             glDisable(GL_CULL_FACE);
+             glDisable(GL_SCISSOR_TEST);
++#if !defined(USE_OPENGLES)
+             glDisable(GL_COLOR_LOGIC_OP);
++#endif
+             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+             if (transfer.PresentationMode ==
+                 GfxNativePicaPresentationMode::AlphaOverlay) {
+@@ -1733,7 +1812,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
+     uint64_t renderTargetNamespace, uint32_t colorPhysicalAddress,
+     std::string* error) {
+-#if defined(USE_OPENGLES) || defined(__APPLE__)
++#if defined(__APPLE__)
+     SetPicaGlError(error, "native PICA requires OpenGL 4.3");
+     return false;
+ #else
+@@ -1765,7 +1844,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
+ 
+ bool GfxRenderingAPIOGL::SubmitPicaMemoryFill(
+     const GfxNativePicaMemoryFillView& fill, std::string* error) {
+-#if defined(USE_OPENGLES) || defined(__APPLE__)
++#if defined(__APPLE__)
+     SetPicaGlError(error, "native PICA requires OpenGL 4.3");
+     return false;
+ #else
+@@ -1802,7 +1881,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
+         SetPicaGlError(error, "PICA completion identity is invalid");
+         return false;
+     }
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+     // SubmitPicaDraw has already copied every guest source span into
+     // backend-owned GL buffers/textures. A completion acknowledges that copy;
+     // it does not need to idle the GPU. GL preserves command ordering through
+@@ -1826,7 +1905,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
+         if (!mNativePica) {
+             throw std::runtime_error("PICA OpenGL backend is not initialized");
+         }
+-#if !defined(USE_OPENGLES) && !defined(__APPLE__)
++#if !defined(__APPLE__)
+         glFinish();
+ #endif
+         InitNativePica();
+diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
+index 5938cd9..555ce30 100644
+--- a/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
++++ b/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
+@@ -416,6 +416,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
++#elif defined(USE_OPENGLES)
++    // Mali-G31 (R36S): the PICA path needs ES 3.2 (SSBOs, images, base vertex).
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+ #endif
+ 
+ #ifdef _WIN32
+@@ -521,6 +526,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+         }
+ 
+         SDL_GL_MakeCurrent(mWnd, mCtx);
++        if (getenv("OOT3D_GL_DEBUG") != nullptr) {
++            fprintf(stderr, "[gl] driver=%s GL=%s renderer=%s\n", SDL_GetCurrentVideoDriver(),
++                    reinterpret_cast<const char*>(glGetString(GL_VERSION)),
++                    reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
++        }
+ #ifdef __SWITCH__
+         if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
+             throw std::runtime_error(std::string("Switch OpenGL loader initialization failed: ") + SDL_GetError());
