@@ -39,32 +39,3 @@ index 5938cd9..8d5d309 100644
  #ifdef __SWITCH__
          if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
              throw std::runtime_error(std::string("Switch OpenGL loader initialization failed: ") + SDL_GetError());
-diff --git a/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py b/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py
-index fed3de8..f509913 100644
---- a/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py
-+++ b/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py
-@@ -5,6 +5,7 @@ from __future__ import annotations
- import argparse
- import hashlib
- import json
-+import os
- from dataclasses import dataclass
- from pathlib import Path
- from typing import Sequence
-@@ -112,8 +113,15 @@ def audit_product(
-         exheader_path.stat().st_size == int(exheader_contract["bytes"]),
-         "ExHeader byte size does not match the product contract",
-     )
-+    # The qualified USA input keeps its own ExHeader (only the title identity
-+    # differs); entrypoint and text size are still checked below.
-+    accepted_exheaders = {str(exheader_contract["sha256"]).lower()} | {
-+        value.strip().lower()
-+        for value in os.environ.get("OOT3D_ACCEPT_EXHEADER_SHA256", "").split(",")
-+        if value.strip()
-+    }
-     expect(
--        _sha256(exheader_path) == str(exheader_contract["sha256"]).lower(),
-+        _sha256(exheader_path) in accepted_exheaders,
-         "ExHeader SHA-256 does not match the product contract",
-     )
-     exheader = exheader_path.read_bytes()
