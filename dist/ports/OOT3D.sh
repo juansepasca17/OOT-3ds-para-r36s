@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
-# PRUEBA 8: mediciones de GPU (normal, mediump, sin dibujar) y luego el juego.
+# PRUEBA 9: PGO + paralelo + memoria en linea + ring de uniforms. Medicion corta y juego.
 #   1) Medición de ~1 minuto con pantalla negra.
 #   2) Después abre el juego normal: Select+Start para salir.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
@@ -83,20 +83,15 @@ bench() {  # $1 nombre, resto: variables de entorno
   echo "exit code $name: $?"
   [ -f "$GAMEDIR/bench_$name.json" ] && grep -A4 '"frame_times"' "$GAMEDIR/bench_$name.json"
 }
-msg "1/4 Midiendo GPU: normal (1-2 min).$first_run"
-bench normal OOT3D_GL_FINISH_TIMING=1
-code=$?
-msg "2/4 Midiendo GPU: precision media (la primera vez compila shaders)."
-bench mediump OOT3D_GLES_FRAGMENT_PRECISION=mediump OOT3D_GL_FINISH_TIMING=1
-msg "3/4 Midiendo sin dibujar (pantalla negra es normal)."
-bench skipdraw OOT3D_GL_SKIP_DRAWS=1
+msg "1/2 Midiendo rendimiento (1-2 min).$first_run"
+bench ring OOT3D_GL_FINISH_TIMING=1
 MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_name="paralelo"
 # El log se vuelca a la SD cada 10 s: sobrevive aunque se apague la consola.
 ( while sleep 10; do sync; done ) &
 SYNC_PID=$!
 
 # 2) Juego normal. Select+Start cierra el juego.
-msg "4/4 Abriendo el juego en modo $mode_name... (Select+Start: salir)"
+msg "2/2 Abriendo el juego... (Select+Start: salir)"
 sleep 2
 echo "---- juego ($mode_name) ----"
 if [ -n "$controlfolder" ]; then

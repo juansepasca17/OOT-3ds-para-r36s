@@ -34,7 +34,7 @@ index b49d215..55c299e 100644
  #endif
  
 diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
-index 6308e40..81df3ec 100644
+index 6308e40..990cc86 100644
 --- a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
 +++ b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
 @@ -11,6 +11,8 @@
@@ -306,7 +306,25 @@ index 6308e40..81df3ec 100644
      Renderer3ds::PicaCompositionSchedule Composition;
      std::map<PicaGlShaderKey, PicaGlProgram> Programs;
      std::map<PicaGlTargetKey, PicaGlTarget> Targets;
-@@ -536,7 +692,7 @@ GfxRenderingAPIOGL::~GfxRenderingAPIOGL() {
+@@ -508,6 +664,17 @@ struct GfxRenderingAPIOGL::NativePicaState {
+     GLuint IndexBuffer = 0U;
+     GLuint VertexUniformBuffer = 0U;
+     GLuint FragmentUniformBuffer = 0U;
++    // Per-draw uniforms: one ring buffer written with unsynchronized maps
++    // instead of two glBufferData reallocations per draw (costly on Mali).
++    // Segments are recycled only after their fence signals.
++    static constexpr GLsizeiptr kUniformRingSegment = 1024 * 1024;
++    static constexpr int kUniformRingSegments = 4;
++    GLuint UniformRing = 0U;
++    GLint UniformRingAlignment = 256;
++    int UniformRingSegment = 0;
++    GLsizeiptr UniformRingOffset = 0;
++    std::array<GLsync, kUniformRingSegments> UniformRingFences{};
++    bool UniformRingEnabled = false;
+     GLuint FallbackColor = 0U;
+     GLuint FallbackInteger = 0U;
+     GLuint ScanoutProgram = 0U;
+@@ -536,7 +703,7 @@ GfxRenderingAPIOGL::~GfxRenderingAPIOGL() {
  void GfxRenderingAPIOGL::InitNativePica() {
      ShutdownNativePica();
      mNativePica = std::make_unique<NativePicaState>();
@@ -315,7 +333,28 @@ index 6308e40..81df3ec 100644
      auto& state = *mNativePica;
      state.GeometryCacheEnabled = mNativePicaGeometryCacheEnabled;
      glGenVertexArrays(1, &state.VertexArray);
-@@ -557,13 +713,12 @@ void GfxRenderingAPIOGL::InitNativePica() {
+@@ -545,6 +712,20 @@ void GfxRenderingAPIOGL::InitNativePica() {
+     glGenBuffers(1, &state.IndexBuffer);
+     glGenBuffers(1, &state.VertexUniformBuffer);
+     glGenBuffers(1, &state.FragmentUniformBuffer);
++    {
++        const char* ring = std::getenv("OOT3D_GL_UBO_RING");
++        state.UniformRingEnabled = ring == nullptr || std::string_view(ring) != "0";
++        if (state.UniformRingEnabled) {
++            glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &state.UniformRingAlignment);
++            state.UniformRingAlignment = std::max<GLint>(state.UniformRingAlignment, 16);
++            glGenBuffers(1, &state.UniformRing);
++            glBindBuffer(GL_UNIFORM_BUFFER, state.UniformRing);
++            glBufferData(GL_UNIFORM_BUFFER,
++                         state.kUniformRingSegment * state.kUniformRingSegments,
++                         nullptr, GL_DYNAMIC_DRAW);
++            glBindBuffer(GL_UNIFORM_BUFFER, 0);
++        }
++    }
+ 
+     const std::array<uint8_t, 4> white{255U, 255U, 255U, 255U};
+     glGenTextures(1, &state.FallbackColor);
+@@ -557,13 +738,12 @@ void GfxRenderingAPIOGL::InitNativePica() {
      const uint32_t emptyShadow = 0xFFFFFFFFU;
      glGenTextures(1, &state.FallbackInteger);
      glBindTexture(GL_TEXTURE_2D, state.FallbackInteger);
@@ -331,7 +370,7 @@ index 6308e40..81df3ec 100644
  out vec2 pica_uv;
  void main() {
      const vec2 positions[3] = vec2[3](
-@@ -573,7 +728,7 @@ void main() {
+@@ -573,7 +753,7 @@ void main() {
      pica_uv = position * 0.5 + 0.5;
  }
  )glsl";
@@ -340,7 +379,7 @@ index 6308e40..81df3ec 100644
  layout(binding=0) uniform sampler2D pica_scanout;
  uniform int pica_flip_y;
  in vec2 pica_uv;
-@@ -623,7 +778,7 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
+@@ -623,7 +803,7 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
      if (!mNativePica) {
          return;
      }
@@ -349,7 +388,19 @@ index 6308e40..81df3ec 100644
      auto& state = *mNativePica;
      for (auto& [key, program] : state.Programs) {
          glDeleteProgram(program.Handle);
-@@ -672,7 +827,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
+@@ -651,6 +831,11 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
+     glDeleteBuffers(1, &state.IndexBuffer);
+     glDeleteBuffers(1, &state.VertexUniformBuffer);
+     glDeleteBuffers(1, &state.FragmentUniformBuffer);
++    for (GLsync& fence : state.UniformRingFences) {
++        if (fence != nullptr) glDeleteSync(fence);
++        fence = nullptr;
++    }
++    if (state.UniformRing != 0U) glDeleteBuffers(1, &state.UniformRing);
+     glDeleteVertexArrays(1, &state.VertexArray);
+ #endif
+     mNativePica.reset();
+@@ -672,7 +857,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
  bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
      const Renderer3ds::PicaCompositionSequenceView& sequence,
      std::string* error) {
@@ -358,7 +409,7 @@ index 6308e40..81df3ec 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -701,7 +856,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
+@@ -701,7 +886,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
  #endif
  }
  
@@ -367,7 +418,7 @@ index 6308e40..81df3ec 100644
  namespace {
  
  void DeletePicaGlGeometry(
-@@ -763,8 +918,8 @@ PicaGlTarget& GetPicaGlTarget(
+@@ -763,8 +948,8 @@ PicaGlTarget& GetPicaGlTarget(
  
          glGenTextures(1, &target.Shadow);
          glBindTexture(GL_TEXTURE_2D, target.Shadow);
@@ -378,7 +429,7 @@ index 6308e40..81df3ec 100644
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-@@ -927,8 +1082,10 @@ PicaGlTexture& GetPicaGlTexture(
+@@ -927,8 +1112,10 @@ PicaGlTexture& GetPicaGlTexture(
              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,
                              std::min<uint32_t>(texture.MaxMipLevel,
                                                 mipLevels - 1U));
@@ -389,7 +440,7 @@ index 6308e40..81df3ec 100644
          }
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
                          ToPicaGlWrap(texture.NativeWrapS));
-@@ -1083,7 +1240,7 @@ PicaGlDisplay& GetPicaGlDisplay(
+@@ -1083,7 +1270,7 @@ PicaGlDisplay& GetPicaGlDisplay(
  GfxNativePicaBackendStats
  GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
      GfxNativePicaBackendStats result;
@@ -398,7 +449,7 @@ index 6308e40..81df3ec 100644
      if (mNativePica != nullptr) {
          result.Available = true;
          const auto registry = mNativePica->GeometryRegistry.Stats();
-@@ -1114,7 +1271,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
+@@ -1114,7 +1301,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
  void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
      bool enabled) noexcept {
      mNativePicaGeometryCacheEnabled = enabled;
@@ -407,8 +458,61 @@ index 6308e40..81df3ec 100644
      if (mNativePica != nullptr) {
          mNativePica->GeometryCacheEnabled = enabled;
      }
-@@ -1125,7 +1282,7 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
+@@ -1123,9 +1310,60 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
+ #endif
+ }
  
++namespace {
++
++// Writes both uniform blocks of one draw into the ring with a single
++// unsynchronized map and binds the two ranges. False: use the legacy path.
++bool UploadPicaGlUniformsToRing(GfxRenderingAPIOGL::NativePicaState& state,
++                                std::span<const uint8_t> vertex,
++                                std::span<const uint8_t> fragment) {
++    if (!state.UniformRingEnabled || state.UniformRing == 0U) return false;
++    const GLsizeiptr align = state.UniformRingAlignment;
++    const auto aligned = [align](GLsizeiptr value) {
++        return (value + align - 1) / align * align;
++    };
++    const GLsizeiptr fragmentOffset = aligned(static_cast<GLsizeiptr>(vertex.size()));
++    const GLsizeiptr total = aligned(fragmentOffset + static_cast<GLsizeiptr>(fragment.size()));
++    if (total > state.kUniformRingSegment || vertex.empty() || fragment.empty()) return false;
++    if (state.UniformRingOffset + total > state.kUniformRingSegment) {
++        // Close this segment and move to the next one once the GPU is done with it.
++        GLsync& closing = state.UniformRingFences[state.UniformRingSegment];
++        if (closing != nullptr) glDeleteSync(closing);
++        closing = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
++        state.UniformRingSegment = (state.UniformRingSegment + 1) % state.kUniformRingSegments;
++        GLsync& next = state.UniformRingFences[state.UniformRingSegment];
++        if (next != nullptr) {
++            glClientWaitSync(next, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ULL);
++            glDeleteSync(next);
++            next = nullptr;
++        }
++        state.UniformRingOffset = 0;
++    }
++    const GLintptr base = state.UniformRingSegment * state.kUniformRingSegment + state.UniformRingOffset;
++    glBindBuffer(GL_UNIFORM_BUFFER, state.UniformRing);
++    void* mapped = glMapBufferRange(GL_UNIFORM_BUFFER, base, total,
++                                    GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT |
++                                        GL_MAP_INVALIDATE_RANGE_BIT);
++    if (mapped == nullptr) {
++        state.UniformRingEnabled = false;  // driver refused: stay on the legacy path
++        return false;
++    }
++    std::memcpy(mapped, vertex.data(), vertex.size());
++    std::memcpy(static_cast<uint8_t*>(mapped) + fragmentOffset, fragment.data(), fragment.size());
++    glUnmapBuffer(GL_UNIFORM_BUFFER);
++    glBindBufferRange(GL_UNIFORM_BUFFER, 0, state.UniformRing, base,
++                      static_cast<GLsizeiptr>(vertex.size()));
++    glBindBufferRange(GL_UNIFORM_BUFFER, 4, state.UniformRing, base + fragmentOffset,
++                      static_cast<GLsizeiptr>(fragment.size()));
++    state.UniformRingOffset += total;
++    return true;
++}
++
++} // namespace
++
  bool GfxRenderingAPIOGL::SubmitPicaDraw(
      const GfxNativePicaDrawView& draw, std::string* error) {
 -#if defined(USE_OPENGLES) || defined(__APPLE__)
@@ -416,7 +520,41 @@ index 6308e40..81df3ec 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1426,7 +1583,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1172,18 +1410,21 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+         glBindVertexArray(mNativePica->VertexArray);
+         glUseProgram(program.Handle);
+ 
+-        glBindBuffer(GL_UNIFORM_BUFFER, mNativePica->VertexUniformBuffer);
+-        glBufferData(GL_UNIFORM_BUFFER,
+-                     static_cast<GLsizeiptr>(draw.VertexUniformBytes.size()),
+-                     draw.VertexUniformBytes.data(), GL_STREAM_DRAW);
+-        glBindBufferBase(GL_UNIFORM_BUFFER, 0,
+-                         mNativePica->VertexUniformBuffer);
+-        glBindBuffer(GL_UNIFORM_BUFFER, mNativePica->FragmentUniformBuffer);
+-        glBufferData(GL_UNIFORM_BUFFER,
+-                     static_cast<GLsizeiptr>(draw.FragmentUniformBytes.size()),
+-                     draw.FragmentUniformBytes.data(), GL_STREAM_DRAW);
+-        glBindBufferBase(GL_UNIFORM_BUFFER, 4,
+-                         mNativePica->FragmentUniformBuffer);
++        if (!UploadPicaGlUniformsToRing(*mNativePica, draw.VertexUniformBytes,
++                                        draw.FragmentUniformBytes)) {
++            glBindBuffer(GL_UNIFORM_BUFFER, mNativePica->VertexUniformBuffer);
++            glBufferData(GL_UNIFORM_BUFFER,
++                         static_cast<GLsizeiptr>(draw.VertexUniformBytes.size()),
++                         draw.VertexUniformBytes.data(), GL_STREAM_DRAW);
++            glBindBufferBase(GL_UNIFORM_BUFFER, 0,
++                             mNativePica->VertexUniformBuffer);
++            glBindBuffer(GL_UNIFORM_BUFFER, mNativePica->FragmentUniformBuffer);
++            glBufferData(GL_UNIFORM_BUFFER,
++                         static_cast<GLsizeiptr>(draw.FragmentUniformBytes.size()),
++                         draw.FragmentUniformBytes.data(), GL_STREAM_DRAW);
++            glBindBufferBase(GL_UNIFORM_BUFFER, 4,
++                             mNativePica->FragmentUniformBuffer);
++        }
+         mNativePica->UniformUploads += 2U;
+         mNativePica->UniformUploadBytes += draw.VertexUniformBytes.size() +
+                                            draw.FragmentUniformBytes.size();
+@@ -1426,7 +1667,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                             GL_READ_WRITE, GL_R32UI);
          if (shadowProducer) {
              glDisable(GL_BLEND);
@@ -426,7 +564,7 @@ index 6308e40..81df3ec 100644
              glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
          } else {
              glColorMask((draw.ColorWriteMask & 1U) != 0U,
-@@ -1435,7 +1594,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1435,7 +1678,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                          (draw.ColorWriteMask & 8U) != 0U);
              if (draw.Blend.Enabled) {
                  glEnable(GL_BLEND);
@@ -437,7 +575,7 @@ index 6308e40..81df3ec 100644
                  glBlendEquationSeparate(
                      ToPicaGlBlendEquation(draw.Blend.EquationRgb),
                      ToPicaGlBlendEquation(draw.Blend.EquationAlpha));
-@@ -1450,8 +1611,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1450,8 +1695,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                               draw.Blend.ConstantColor[3]);
              } else {
                  glDisable(GL_BLEND);
@@ -448,7 +586,7 @@ index 6308e40..81df3ec 100644
              }
          }
  
-@@ -1530,7 +1693,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1530,7 +1777,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  }
                  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,
                               persistentGeometryBuffer);
@@ -457,7 +595,7 @@ index 6308e40..81df3ec 100644
                      topology,
                      static_cast<GLsizei>(
                          preparedGeometry->VertexOrIndexCount),
-@@ -1559,7 +1722,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1559,7 +1806,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  const GLenum type = draw.IndicesAre16Bit
                                          ? GL_UNSIGNED_SHORT
                                          : GL_UNSIGNED_BYTE;
@@ -466,7 +604,7 @@ index 6308e40..81df3ec 100644
                      topology, static_cast<GLsizei>(indexCount), type, nullptr,
                      draw.BaseVertex);
              }
-@@ -1569,7 +1732,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1569,7 +1816,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  throw std::runtime_error(
                      "PICA non-indexed draw has too many vertices");
              }
@@ -475,7 +613,7 @@ index 6308e40..81df3ec 100644
                           static_cast<GLsizei>(draw.VertexCount));
          }
          // Ordinary raster and framebuffer commands are ordered by GL. Only
-@@ -1592,7 +1755,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1592,7 +1839,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
  bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
      const GfxNativePicaDisplayTransferView& transfer,
      std::string* error) {
@@ -484,7 +622,7 @@ index 6308e40..81df3ec 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1686,7 +1849,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+@@ -1686,7 +1933,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
              glDisable(GL_STENCIL_TEST);
              glDisable(GL_CULL_FACE);
              glDisable(GL_SCISSOR_TEST);
@@ -494,7 +632,7 @@ index 6308e40..81df3ec 100644
              glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
              if (transfer.PresentationMode ==
                  GfxNativePicaPresentationMode::AlphaOverlay) {
-@@ -1733,7 +1898,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+@@ -1733,7 +1982,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
  bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
      uint64_t renderTargetNamespace, uint32_t colorPhysicalAddress,
      std::string* error) {
@@ -503,7 +641,7 @@ index 6308e40..81df3ec 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1765,7 +1930,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
+@@ -1765,7 +2014,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
  
  bool GfxRenderingAPIOGL::SubmitPicaMemoryFill(
      const GfxNativePicaMemoryFillView& fill, std::string* error) {
@@ -512,7 +650,7 @@ index 6308e40..81df3ec 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1802,7 +1967,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
+@@ -1802,7 +2051,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
          SetPicaGlError(error, "PICA completion identity is invalid");
          return false;
      }
@@ -521,7 +659,7 @@ index 6308e40..81df3ec 100644
      // SubmitPicaDraw has already copied every guest source span into
      // backend-owned GL buffers/textures. A completion acknowledges that copy;
      // it does not need to idle the GPU. GL preserves command ordering through
-@@ -1826,7 +1991,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
+@@ -1826,7 +2075,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
          if (!mNativePica) {
              throw std::runtime_error("PICA OpenGL backend is not initialized");
          }
