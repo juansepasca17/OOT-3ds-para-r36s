@@ -1,0 +1,34 @@
+# Archivos propietarios o del usuario: NUNCA se suben
+*.7z
+*.3ds
+*.cci
+*.cia
+*.cxi
+*.app
+*.bin
+*.oot3dsav
+*.o3tu
+*.o2r
+*.tap
+rom/
+work/
+gamedata/
+savedata/
+
+# Binarios de terceros con licencia cerrada (libmali de ARM)
+deps/
+
+# Repos de terceros: se descargan con scripts/fetch_sources.sh
+repos/
+
+# Salidas de compilación
+build*/
+dist/ports/oot3d/
+*.so
+*.so.*
+*.a
+*.o
+*.log
+log.txt
+venv/
+__pycache__/

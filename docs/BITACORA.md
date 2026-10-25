@@ -1,0 +1,39 @@
+# Bitácora técnica
+
+## 2026-10-25 — Sesión 1: investigación y entorno
+
+### ROM
+- `rom/Legend of Zelda, The - Ocarina of Time 3D (USA) (En,Fr,Es) (Rev 1).cci`, 536,870,912 bytes.
+- NCSD → NCCH `CTR-P-AQEE`, Title ID `0004000000033500`, flags `0000000001030004` → **NoCrypto** (desencriptada).
+- SHA-1 `50d6b33de7298d397fa9f0dde78f8b0f23256564` = No-Intro USA Rev 1 (registro 1259).
+  TriAevum la cubre en la verificación de catálogo del 2026-09-08 (`docs/TRIAEVUM_SUPPORTED_ROM.md`)
+  mediante el adaptador USA→canónico (`tools/triaevum_release/input_adapters.py`).
+
+### TriAevum (`repos/TriAevum`, commit `8f69a26`, 2026-10-22; último tag `v0.8.0-beta.1.2`)
+- Pipeline de datos (`tools/triaevum_release/forge_gui.py::install_private_title`):
+  `ctr_rom.extract_decrypted_rom` → `match_extracted_recipe` → `adapt_extracted_inputs` (USA) →
+  `forge.verify_sources` → `forge.prepare_content` → IR AOT → 256 shards C++ → módulo.
+- Producto whole-AOT: 12,419 funciones, 3 fronteras de host, 0 entradas A32 residuales.
+- Port de Switch (`scripts/switch/build-product.sh`): ARM64, `-DOOT3D_ENABLE_VULKAN_RENDERER=OFF`,
+  `-DOOT3D_WHOLE_AOT_PRODUCT_MODE=ON`, SDL2 + OpenGL (Mesa). Solo verificado en el emulador Eden.
+- Backend OpenGL PICA: shaders Vulkan GLSL 450 reescritos a GLSL **430 de escritorio**, con SSBO
+  `std430` (`renderer3ds/pica_gl_shader_dialect.cpp`). El contexto SDL pide un perfil Core 4.x
+  (`gfx_sdl2.cpp:410-417`). → Hay que portarlo a **GLES 3.2**.
+- Toon y contorno: **solo en el backend Vulkan** (`gfx_vulkan_*`). → Hay que portarlos.
+- El runtime ya tiene flags útiles: `--renderer opengl`, `--throughput-benchmark`, `--frames`,
+  `--benchmark-warmup-frames`, `--load-state`, `--disable-audio`, `--ui-profile topscreen`,
+  `--gameplay-timing native30_no_interpolation`, `--parallel-presentation`, `--whole-aot-block-budget`.
+- CPU medida por el proyecto en un PC de escritorio: unos 5.3 ms por actualización sin renderer
+  (4.75 ms de AOT) y unos 94.8 FPS totales en el benchmark OpenGL de Linux.
+
+### dArkOS (`repos/dArkOS`) / dArkOS RE (`southoz/dArkOSRE-R36`)
+- Debian **trixie** (`DEBIAN_CODE_NAME ?= trixie`).
+- RK3326: GPU con **libmali** `libmali-bifrost-g31-rxp0-gbm.so` enlazada como libEGL y libGLESv2
+  → solo GLES + GBM/KMSDRM. No hay Vulkan ni GL de escritorio en RK3326 (Vulkan solo en RK3566).
+- Incluye userspace armhf de 32 bits (`BUILD_ARMHF`) para ports de PortMaster.
+- SDL2 propio (`build_sdl2.sh`).
+
+### Entorno local
+- WSL2 **Debian 13 trixie** instalado (12 hilos, 7.4 GB de RAM, mismo glibc que dArkOS).
+- `deps/mali/libmali-bifrost-g31-rxp0-gbm.so` (aarch64, 40.8 MB) descargada de
+  `christianhaitian/rk3326_core_builds`.
