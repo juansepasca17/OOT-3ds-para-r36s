@@ -57,3 +57,23 @@
   frecuencia del panel: hay que medir el ritmo de frames (VSync vs. limitador propio).
 - Control: `GO-Super Gamepad` (js0/event2). PortMaster en `/opt/system/Tools/PortMaster`.
 - Tiene Ship of Harkinian (PortMaster) funcionando: referencia útil para el contexto GLES y los controles.
+
+### Puerta de CPU — primera medición real en la R36S (2026-10-25)
+Build: GCC 14 `-O2 -mcpu=cortex-a35`, sin LTO ni PGO. Intro del título, 300 frames de calentamiento
++ 600 medidos, renderizado por software (llvmpipe), presentación en serie, sin audio.
+Hicieron falta tres intentos para arrancar: (1) `/etc/profile.d/SDL_VIDEO.sh` forzaba el EGL de Mali
+→ `SDL_VIDEO_EGL_DRIVER` explícito; (2) SDL offscreen elegía la GPU Rockchip y Mesa se caía
+→ `SDL_HINT_EGL_DEVICE=1` (llvmpipe); (3) corrió completo, exit 0.
+
+| Métrica (por frame) | Valor | Presupuesto a 30 fps |
+|---|---|---|
+| CPU antes del renderer (lógica + host), media | **89.1 ms** (p95 98.4) | 33.3 ms |
+| — guest (código AOT del juego) | **76.9 ms** | |
+| — plan de presentación | 6.8 ms | |
+| — DSP | 2.6 ms | |
+| — captura de cola PICA | 2.4 ms | |
+| Frame total con llvmpipe | 687 ms (1.46 fps) | (no representativo: render por CPU) |
+
+**Conclusión:** la lógica sola está **2.7× por encima** del presupuesto de 30 fps (≈ 11 fps de techo
+de CPU con este build), en línea con la estimación inicial de 60–80 ms. Siguiente paso posible:
+Fase 2b (flags de compilación → LTO/PGO → cambios al generador AOT).
