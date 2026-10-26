@@ -181,3 +181,10 @@ Verificación: 120 millones de casos aleatorios + bordes, todos los modos FPSCR,
 **0 diferencias** bit a bit (valor y flags). 3.927 comparaciones del juego pasan a la ruta rápida.
 Nota: `memory_state_fingerprint` del benchmark x86 **no es determinista** (mismo binario, dos huellas
 distintas): no sirve como prueba de equivalencia entre versiones.
+
+**Medición en la consola (trabajo 007, A/B alternado, 600 frames):** v1.1.0 83,3 ms ±1,4 vs coma flotante
+rápida 84,4 ms ±0,7 → **sin cambio** (dentro del ruido). Causa: la categoría "coma flotante" del perfil 003
+(7 %) mezclaba otras funciones del espacio de nombres `recomp::a32`; la emulación por software real era
+~1,5 % y ahora ~1 % (`Divide` 0,56 → 0,30 %). Se mantiene (exacta, inofensiva). Perfil 007: código del juego
+traducido **~38 %**, frontend PICA 9 % (+5 % en el hilo de render), libmali 16 % (render), libc (memcpy) 5 %.
+Conclusión: el costo está en el código generado → traductor v2 (`docs/TRADUCTOR_V2.md`).
