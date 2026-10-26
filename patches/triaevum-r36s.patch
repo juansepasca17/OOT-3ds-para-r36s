@@ -1487,6 +1487,46 @@ index 6c029b6..870497c 100644
    if (hostGuiOwnsInput) {
      if (mModel.IsOpen()) mModel.Close();
      mConfirmationModal = false;
+diff --git a/tools/oot3d/native_game_runtime/oot3d_native_a32_memory.cpp b/tools/oot3d/native_game_runtime/oot3d_native_a32_memory.cpp
+index d02560b..7e2848c 100644
+--- a/tools/oot3d/native_game_runtime/oot3d_native_a32_memory.cpp
++++ b/tools/oot3d/native_game_runtime/oot3d_native_a32_memory.cpp
+@@ -396,6 +396,35 @@ uint64_t NativeA32Memory::ContentFingerprint() const {
+             append(region.Bytes.data(), region.Bytes.size());
+         }
+     }
++    // Determinism diagnostics: OOT3D_DUMP_PAGE_HASHES=<file> lists a hash of
++    // every 4 KiB guest page, so two runs can be diffed page by page; with
++    // OOT3D_DUMP_PAGE=<guest address>, that page is also written raw beside it.
++    if (const char* path = std::getenv("OOT3D_DUMP_PAGE_HASHES")) {
++        if (FILE* file = std::fopen(path, "w")) {
++            const char* pageText = std::getenv("OOT3D_DUMP_PAGE");
++            const uint32_t dumpPage = pageText != nullptr ? static_cast<uint32_t>(std::strtoul(pageText, nullptr, 16)) : 0U;
++            for (const auto& region : mRegions) {
++                for (size_t offset = 0; offset < region.Bytes.size(); offset += 4096U) {
++                    uint64_t pageHash = 14695981039346656037ULL;
++                    const size_t size = std::min<size_t>(4096U, region.Bytes.size() - offset);
++                    for (size_t index = 0; index < size; ++index) {
++                        pageHash = (pageHash ^ region.Bytes[offset + index]) * 1099511628211ULL;
++                    }
++                    const uint32_t address = region.BaseAddress + static_cast<uint32_t>(offset);
++                    std::fprintf(file, "%s %08x %016llx\n", region.Name.c_str(), address,
++                                 static_cast<unsigned long long>(pageHash));
++                    if (pageText != nullptr && address == dumpPage) {
++                        const std::string raw = std::string(path) + ".page";
++                        if (FILE* page = std::fopen(raw.c_str(), "wb")) {
++                            std::fwrite(region.Bytes.data() + offset, 1, size, page);
++                            std::fclose(page);
++                        }
++                    }
++                }
++            }
++            std::fclose(file);
++        }
++    }
+     return hash;
+ }
+ 
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_a32_memory.h b/tools/oot3d/native_game_runtime/oot3d_native_a32_memory.h
 index 170d078..a24a581 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_a32_memory.h
@@ -2181,8 +2221,21 @@ index 0000000..43f32bc
 +};
 +
 +} // namespace Oot3dNativeGame
+diff --git a/tools/oot3d/third_party/azahar_audio/audio_core/hle/mixers.cpp b/tools/oot3d/third_party/azahar_audio/audio_core/hle/mixers.cpp
+index 40cd034..e9bf55c 100644
+--- a/tools/oot3d/third_party/azahar_audio/audio_core/hle/mixers.cpp
++++ b/tools/oot3d/third_party/azahar_audio/audio_core/hle/mixers.cpp
+@@ -294,7 +294,7 @@ void Mixers::MixCurrentFrame() {
+ }
+ 
+ DspStatus Mixers::GetCurrentStatus() const {
+-    DspStatus status;
++    DspStatus status{}; // zeroed: the padding is copied to guest memory (determinism)
+     status.unknown = 0;
+     status.dropped_frames = 0;
+     return status;
 diff --git a/tools/oot3d/third_party/azahar_audio/audio_core/hle/source.cpp b/tools/oot3d/third_party/azahar_audio/audio_core/hle/source.cpp
-index 35bb2e3..5cdb4bf 100644
+index 35bb2e3..ec329e8 100644
 --- a/tools/oot3d/third_party/azahar_audio/audio_core/hle/source.cpp
 +++ b/tools/oot3d/third_party/azahar_audio/audio_core/hle/source.cpp
 @@ -4,6 +4,7 @@
@@ -2213,6 +2266,15 @@ index 35bb2e3..5cdb4bf 100644
          case InterpolationMode::None:
              AudioInterp::None(state.interp_state, state.current_buffer, state.rate_multiplier,
                                current_frame, frame_position);
+@@ -707,7 +712,7 @@ bool Source::DequeueBuffer() {
+ }
+ 
+ SourceStatus::Status Source::GetCurrentStatus() {
+-    SourceStatus::Status ret;
++    SourceStatus::Status ret{}; // zeroed: copied to guest memory (determinism)
+ 
+     // Applications depend on the correct emulation of
+     // current_buffer_id_dirty and current_buffer_id to synchronise
 diff --git a/tools/oot3d/ui_menu/oot3d_menu_presentation.h b/tools/oot3d/ui_menu/oot3d_menu_presentation.h
 index 634a3b1..ec05dea 100644
 --- a/tools/oot3d/ui_menu/oot3d_menu_presentation.h

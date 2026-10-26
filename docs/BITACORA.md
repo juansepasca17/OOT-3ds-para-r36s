@@ -246,3 +246,11 @@ Conclusión: el costo está en el código generado → traductor v2 (`docs/TRADU
   Costo 9 % → 4,5 % tras abaratar la búsqueda (±128, paso 4, correlación cada 16 muestras).
 - Consola (trabajo 023, con audio): **15,9 fps** sin estirado, 15,2 con estirado (v1.2.0: 14,3).
 - Trampa nueva: sincronizar a WSL también los archivos revertidos (`console_build.sh` corregido).
+
+### A5 — benchmark del PC determinista (2026-10-26)
+- Dos corridas del mismo binario x86 daban huellas distintas desde el frame 3. Con `setarch -R` (sin ASLR) coincidían:
+  se colaban **direcciones del host** en la memoria del juego.
+- `OOT3D_DUMP_PAGE_HASHES` (hash por página de 4 KiB) → solo 2 páginas distintas, en la RAM del DSP
+  (`0x1FF50804`, `0x1FF70804`): `Mixers::GetCurrentStatus()` copiaba un `DspStatus` sin inicializar (28 bytes de
+  relleno con basura de pila). Fallo heredado de Azahar. Arreglo: `DspStatus status{};` (y `SourceStatus::Status ret{};`).
+- Resultado: 300 frames, dos corridas, **huellas idénticas** con ASLR. Herramienta: `scripts/wsl/det_run.sh`.

@@ -39,7 +39,7 @@ aceptación, comandos y trampas conocidas. Última actualización: **2026-10-26 
 | 4 | **D2** Audio más simple | 1–3 % | Bajo | C1b |
 | 5 | **D1** Frontend PICA en otro núcleo | 5–9 % | Medio–alto | — |
 | 6 | Publicar **v1.2.0** (D1–D3 + menú) en `estable` tras A/B en consola | — | Bajo | 1–5 |
-| 7 | **A5** Benchmark x86 determinista (checkpoint + `--load-state`) | — | Bajo | — |
+| 7 | **A5** Benchmark x86 determinista | — | ✅ Hecho (DSP sin inicializar; `scripts/wsl/det_run.sh`) | — |
 | 8 | **A4** Banco diferencial por función | — | Medio | A5 opcional |
 | 9 | **T1→T3→T2→T7→T4** Traductor v2 | 15–30 % | Alto | A4 |
 
