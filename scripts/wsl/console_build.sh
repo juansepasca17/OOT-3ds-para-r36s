@@ -23,7 +23,10 @@ started=$(date +%s)
 step() { echo "[$(( $(date +%s) - started ))s] $*"; }
 
 step "sync"
-for f in $(cd "$project/repos/TriAevum" && git diff --name-only); do
+# Both sides' changed files: a file reverted on Windows no longer appears in
+# its git diff but still differs in the WSL tree.
+for f in $(cd "$project/repos/TriAevum" && git diff --name-only 8f69a26; cd "$root/TriAevum" && git diff --name-only HEAD); do
+  [ -f "$project/repos/TriAevum/$f" ] || continue
   sed 's/\r$//' "$project/repos/TriAevum/$f" > /tmp/sync.tmp
   cmp -s /tmp/sync.tmp "$root/TriAevum/$f" || { cp /tmp/sync.tmp "$root/TriAevum/$f"; echo "  updated $f"; }
 done

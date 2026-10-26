@@ -9,10 +9,10 @@ con el renderer portado a **OpenGL ES 3.2**.
 
 | Rama | Qué es |
 |---|---|
-| **`estable`** (tag `v1.2.0`) | Versión jugable recomendada: ~14 fps de lógica en la R36S, HUD y menú Fn visibles |
+| **`estable`** (tag `v1.2.1`) | Versión jugable recomendada: ~15,9 fps de lógica en la R36S, HUD y menú Fn visibles |
 | `main` | Desarrollo: optimizaciones del traductor en curso ([docs/TRADUCTOR_V2.md](docs/TRADUCTOR_V2.md)). Puede estar a medias |
 
-## Estado (v1.2.0, 2026-10-26)
+## Estado (v1.2.1, 2026-10-26)
 
 **Se puede jugar completo.** Va por debajo de los 30 fps originales: el juego corre más lento que en tiempo real.
 
@@ -20,7 +20,7 @@ con el renderer portado a **OpenGL ES 3.2**.
 - ✅ Español (la ROM USA trae inglés, francés y español), una sola pantalla (SingleScreen 3.0).
 - ✅ GPU real (Mali-G31, GLES 3.2), CPU y GPU en paralelo, caché persistente de shaders, PGO.
 - ✅ **HUD visible** (corazones, rupias, botones) y **menú Fn visible y legible** (v1.2.0).
-- ✅ Menú Fn → Game → **R36S performance**: *Half-rate drawing* y *Simple audio* (activados por defecto).
+- ✅ Menú Fn → Game → **R36S performance**: *Half-rate drawing*, *Simple audio*, *Audio stretching* (activados) y *Show FPS* (apagado).
 - ✅ Preset gráfico **Toon** (cel-shading) en Fn → Video → Graphics preset.
 - ⚠️ Con *Half-rate drawing* la imagen se actualiza a la mitad (~7 fps visibles); se puede apagar.
 - ⚠️ Los guardados rápidos (*save states*) del menú no funcionan con OpenGL (solo con Vulkan).
@@ -29,9 +29,16 @@ con el renderer portado a **OpenGL ES 3.2**.
 |---|---|---|---|
 | v1.0.0 | 129 | 7,7 | Port inicial (GLES, paralelo, PGO) |
 | v1.1.0 | 82–85 | 12,2 | CPU y GPU en paralelo (`TRIAEVUM_INPUT_ADMISSION=0`) |
-| **v1.2.0** | **69,8** | **14,3** | Dibujo a medio ritmo + audio simple; HUD y menú arreglados |
+| v1.2.0 | 69,8 | 14,3 | Dibujo a medio ritmo + audio simple; HUD y menú arreglados |
+| **v1.2.1** | **62,9** | **15,9** | Sin cuadros negros; contador de FPS; audio estirado (−4,5 % si está activo) |
 
 Mediciones en la consola con el agente de pruebas por red, A/B alternado y con audio (demo de la pantalla de título).
+
+### Novedades de la v1.2.1
+- **Sin cuadros negros** con el dibujo a medio ritmo: los frames vacíos se detectan por número de dibujos y se
+  mantiene la última imagen, como en la pantalla de una 3DS.
+- **Contador de FPS** (Fn → Game → R36S performance → Show FPS): velocidad del juego e imágenes por segundo.
+- **Audio estirado** (WSOLA, como los emuladores): el sonido no se corta cuando el juego va lento.
 
 ### Novedades de la v1.2.0
 - **HUD y menú Fn invisibles: arreglado.** La GPU emulada (PICA) dejaba enlazado su *vertex array* y la interfaz
@@ -100,8 +107,8 @@ contexto (con Mesa pasan desapercibidas, pero en Mali corrompen el driver).
 
 ## Instalar en la R36S
 
-Copiar `dist/ports/OOT3D v1.2.0.sh` y la carpeta `dist/ports/oot3d/` a `/roms/ports/` de la SD
-(`EASYROMS\ports\` en Windows). Aparece en **Ports → OOT3D v1.2.0**.
+Copiar `dist/ports/OOT3D v1.2.1.sh` y la carpeta `dist/ports/oot3d/` a `/roms/ports/` de la SD
+(`EASYROMS\ports\` en Windows). Aparece en **Ports → OOT3D v1.2.1**.
 - La primera vez compila shaders (unos minutos); quedan guardados en `oot3d/shadercache/`.
 - **Select + Start** sale. La partida va en `oot3d/savedata/`.
 - `dist/ports/OOT3D-Info.sh` registra los datos de la consola en `ports/oot3d_info.txt`.

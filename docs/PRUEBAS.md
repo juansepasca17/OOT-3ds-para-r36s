@@ -58,8 +58,9 @@ Resultado: `python scripts/summarize_results.py work/devserver/results/NNN-x --b
 7. **ccache con PGO:** requiere `ccache -o ignore_options=-fprofile-partial-training` (ccache 4.11 no conoce esa opción y no cachea nada sin esto).
 8. **Cambios de cabeceras recompilan los 256 shards** (~20 min aarch64). Juntar varios cambios de
    cabecera en una sola compilación cuando se pueda; los `.cpp` sueltos tardan ~30 s.
-9. **Rutas absolutas** en los scripts de WSL (los scripts hacen `cd` al directorio del juego).
-10. **Si la consola no responde**, anotarlo en `docs/PENDIENTE_CONFIRMAR.md` y seguir con trabajo de PC.
+9. **Sincronizar también lo revertido:** un archivo devuelto a su versión original ya no sale en `git diff` de Windows pero sigue cambiado en el árbol de WSL (`console_build.sh` ya lo cubre).
+10. **Rutas absolutas** en los scripts de WSL (los scripts hacen `cd` al directorio del juego).
+11. **Si la consola no responde**, anotarlo en `docs/PENDIENTE_CONFIRMAR.md` y seguir con trabajo de PC.
 
 ## Ahorrar tokens
 

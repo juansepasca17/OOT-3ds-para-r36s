@@ -232,3 +232,17 @@ Conclusión: el costo está en el código generado → traductor v2 (`docs/TRADU
 - Consola, trabajo 014 (con audio, A/B x2): v1.1.0 81,8 ms (12,2 fps) → **v1.2.0 69,8 ms (14,3 fps), +17,2 %**;
   v1.2.0 con audio de alta calidad 70,6 ms (+15,8 %).
 - Instalada en la SD como `OOT3D v1.2.0.sh` (binario v1.1.0 guardado en `oot3d/dev/old/`).
+
+### v1.2.1 (2026-10-26)
+- **Cuadro negro con dibujo a medio ritmo** (en partida "se arreglaba solo"): suprimir la presentación con un
+  desfase fijo fallaba porque el desfase entre dibujar y presentar cambia (demo de título vs partida).
+  Registro de transferencias (`OOT3D_TRANSFER_DEBUG=1`): el juego alterna búferes de salida; los frames saltados
+  tienen 1 (título) o 4 (partida) dibujos frente a decenas. Regla final en `SubmitPicaDisplayTransfer`: con
+  medio ritmo activo, una imagen con ≤ 4 dibujos o ≤ ¼ de la última buena no se presenta (nunca dos seguidas);
+  `EnsurePicaScanoutPresented()` vuelve a presentar la última, como hace la pantalla de la 3DS.
+  Probados y descartados: suprimir el swap con desfase fijo; marcar la transferencia en el hilo del juego.
+- **Contador de FPS** (Show FPS, apagado): FPS de lógica e IMAGEN (escenas presentadas), con la fuente del menú.
+- **Audio estirado** (WSOLA en `SDLAudioPlayer::DoPlay`, activado): sin cortes cuando el juego va lento.
+  Costo 9 % → 4,5 % tras abaratar la búsqueda (±128, paso 4, correlación cada 16 muestras).
+- Consola (trabajo 023, con audio): **15,9 fps** sin estirado, 15,2 con estirado (v1.2.0: 14,3).
+- Trampa nueva: sincronizar a WSL también los archivos revertidos (`console_build.sh` corregido).

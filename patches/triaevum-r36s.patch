@@ -21,6 +21,34 @@ index fdb9aa9..9c14c1c 100644
          tools/oot3d/native_game_runtime/oot3d_native_pcm_diagnostics.cpp
          tools/oot3d/native_game_runtime/oot3d_native_controls_settings_panel.cpp
          tools/oot3d/native_game_runtime/oot3d_game_language_panel.cpp
+diff --git a/runtime/three_ds_recomp/include/fast/backends/gfx_opengl.h b/runtime/three_ds_recomp/include/fast/backends/gfx_opengl.h
+index 13da19e..d0c8194 100644
+--- a/runtime/three_ds_recomp/include/fast/backends/gfx_opengl.h
++++ b/runtime/three_ds_recomp/include/fast/backends/gfx_opengl.h
+@@ -177,6 +177,9 @@ class GfxRenderingAPIOGL final : public GfxRenderingAPI {
+     void InitNativePica();
+     void ShutdownNativePica() noexcept;
+     void InvalidateLegacyStateAfterPica() noexcept;
++    void EnsurePicaScanoutPresented() noexcept;
++    void EnsureNativeScenePresented() override { EnsurePicaScanoutPresented(); }
++    void ResetPicaPresentedFrame() noexcept;
+ 
+     void SetUniforms(ShaderProgram* prg) const;
+     std::string BuildFsShader(const CCFeatures& cc_features);
+diff --git a/runtime/three_ds_recomp/include/fast/backends/gfx_rendering_api.h b/runtime/three_ds_recomp/include/fast/backends/gfx_rendering_api.h
+index a70b830..e1d96f9 100644
+--- a/runtime/three_ds_recomp/include/fast/backends/gfx_rendering_api.h
++++ b/runtime/three_ds_recomp/include/fast/backends/gfx_rendering_api.h
+@@ -111,6 +111,9 @@ class GfxRenderingAPI : public ::Fast::Renderer3ds::PicaRenderBackend {
+                                        uint32_t width, uint32_t height) {
+         return false;
+     }
++    // Before overlay UI: make sure this frame shows a scanned-out scene (the
++    // last one when the title presented none this frame).
++    virtual void EnsureNativeScenePresented() {}
+     virtual bool SetNativeSamplerParameters(int sampler, const GfxNativeSamplerState& state) {
+         return false;
+     }
 diff --git a/runtime/three_ds_recomp/src/fast/Fast3dGui.cpp b/runtime/three_ds_recomp/src/fast/Fast3dGui.cpp
 index b49d215..55c299e 100644
 --- a/runtime/three_ds_recomp/src/fast/Fast3dGui.cpp
@@ -42,7 +70,7 @@ index b49d215..55c299e 100644
  #endif
  
 diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl.cpp
-index 1c660cb..21a361e 100644
+index 1c660cb..a248702 100644
 --- a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl.cpp
 +++ b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl.cpp
 @@ -141,15 +141,26 @@ GfxClipParameters GfxRenderingAPIOGL::GetClipParameters() {
@@ -85,11 +113,27 @@ index 1c660cb..21a361e 100644
      const GLchar* sources[2] = { vs_buf.data(), fs_buf.data() };
      const GLint lengths[2] = { (GLint)vs_buf.size(), (GLint)fs_buf.size() };
      GLint success;
+@@ -1110,6 +1127,8 @@ void GfxRenderingAPIOGL::StartFrame() {
+ }
+ 
+ void GfxRenderingAPIOGL::EndFrame() {
++    EnsurePicaScanoutPresented();
++    ResetPicaPresentedFrame();
+     glFlush();
+ }
+ 
 diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
-index 6308e40..a06c8fd 100644
+index 6308e40..9b53955 100644
 --- a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
 +++ b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
-@@ -11,6 +11,8 @@
+@@ -1,5 +1,6 @@
+ #ifdef ENABLE_OPENGL
+ 
++#include <atomic>
+ #include "fast/backends/gfx_opengl.h"
+ 
+ #include "fast/oot3d/pica_geometry_registry.h"
+@@ -11,6 +12,8 @@
  #include <algorithm>
  #include <array>
  #include <cmath>
@@ -98,7 +142,7 @@ index 6308e40..a06c8fd 100644
  #include <cstring>
  #include <limits>
  #include <map>
-@@ -22,6 +24,33 @@
+@@ -22,7 +25,35 @@
  #include <utility>
  #include <vector>
  
@@ -130,9 +174,11 @@ index 6308e40..a06c8fd 100644
 +#endif
 +
  namespace Fast {
++
  namespace {
  
-@@ -31,7 +60,7 @@ void SetPicaGlError(std::string* error, std::string message) {
+ void SetPicaGlError(std::string* error, std::string message) {
+@@ -31,7 +62,7 @@ void SetPicaGlError(std::string* error, std::string message) {
      }
  }
  
@@ -141,7 +187,25 @@ index 6308e40..a06c8fd 100644
  
  uint64_t HashBytes(std::span<const uint8_t> bytes) {
      uint64_t hash = 1469598103934665603ULL;
-@@ -140,7 +169,98 @@ struct PicaGlGeometryBuffer {
+@@ -105,6 +136,8 @@ struct PicaGlProgram {
+ };
+ 
+ struct PicaGlTarget {
++    // Draws since this target was last copied by a display transfer.
++    uint32_t DrawsSinceTransfer = 0U;
+     GLuint Framebuffer = 0U;
+     GLuint Color = 0U;
+     GLuint DepthStencil = 0U;
+@@ -118,6 +151,8 @@ struct PicaGlTexture {
+ };
+ 
+ struct PicaGlDisplay {
++    // Draws in the target when its picture was copied here (half-rate drawing).
++    uint32_t ContentDraws = 0U;
+     GLuint Framebuffer = 0U;
+     GLuint Color = 0U;
+     uint32_t Width = 0U;
+@@ -140,7 +175,98 @@ struct PicaGlGeometryBuffer {
      uint64_t StructuralSignature = 0U;
  };
  
@@ -240,7 +304,7 @@ index 6308e40..a06c8fd 100644
      const GLuint shader = glCreateShader(stage);
      const GLchar* text = source.data();
      const GLint length = static_cast<GLint>(source.size());
-@@ -155,10 +275,35 @@ GLuint CompilePicaGlShader(GLenum stage, std::string_view source) {
+@@ -155,10 +281,35 @@ GLuint CompilePicaGlShader(GLenum stage, std::string_view source) {
      glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
      std::string log(static_cast<size_t>(std::max(logLength, 1)), '\0');
      glGetShaderInfoLog(shader, logLength, nullptr, log.data());
@@ -277,7 +341,7 @@ index 6308e40..a06c8fd 100644
  }
  
  PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
-@@ -176,6 +321,60 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
+@@ -176,6 +327,60 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
              "PICA fragment shader translation failed: " + translateError);
      }
  
@@ -338,7 +402,7 @@ index 6308e40..a06c8fd 100644
      const GLuint vertex = CompilePicaGlShader(GL_VERTEX_SHADER, vertexSource);
      GLuint fragment = 0U;
      GLuint program = 0U;
-@@ -184,6 +383,9 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
+@@ -184,6 +389,9 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
          program = glCreateProgram();
          glAttachShader(program, vertex);
          glAttachShader(program, fragment);
@@ -348,7 +412,7 @@ index 6308e40..a06c8fd 100644
          glLinkProgram(program);
          GLint linked = GL_FALSE;
          glGetProgramiv(program, GL_LINK_STATUS, &linked);
-@@ -196,20 +398,27 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
+@@ -196,20 +404,27 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
              throw std::runtime_error(
                  "PICA OpenGL program link failed: " + log);
          }
@@ -388,7 +452,7 @@ index 6308e40..a06c8fd 100644
      } catch (...) {
          if (program != 0U) {
              glDeleteProgram(program);
-@@ -251,6 +460,7 @@ GLenum ToPicaGlStencil(GfxNativePicaStencilAction action) {
+@@ -251,6 +466,7 @@ GLenum ToPicaGlStencil(GfxNativePicaStencilAction action) {
      throw std::runtime_error("invalid PICA stencil action");
  }
  
@@ -396,7 +460,7 @@ index 6308e40..a06c8fd 100644
  GLenum ToPicaGlLogic(GfxNativePicaLogicOperation operation) {
      switch (operation) {
          case GfxNativePicaLogicOperation::Clear: return GL_CLEAR;
-@@ -272,6 +482,7 @@ GLenum ToPicaGlLogic(GfxNativePicaLogicOperation operation) {
+@@ -272,6 +488,7 @@ GLenum ToPicaGlLogic(GfxNativePicaLogicOperation operation) {
      }
      throw std::runtime_error("invalid PICA logic operation");
  }
@@ -404,7 +468,7 @@ index 6308e40..a06c8fd 100644
  
  GLenum ToPicaGlBlendEquation(GfxNativeBlendEquation equation) {
      switch (equation) {
-@@ -490,7 +701,7 @@ void DeletePicaDisplay(PicaGlDisplay& display) {
+@@ -490,7 +707,7 @@ void DeletePicaDisplay(PicaGlDisplay& display) {
  
  struct GfxRenderingAPIOGL::NativePicaState {
      std::vector<uint64_t> Completions;
@@ -413,7 +477,16 @@ index 6308e40..a06c8fd 100644
      Renderer3ds::PicaCompositionSchedule Composition;
      std::map<PicaGlShaderKey, PicaGlProgram> Programs;
      std::map<PicaGlTargetKey, PicaGlTarget> Targets;
-@@ -508,6 +719,17 @@ struct GfxRenderingAPIOGL::NativePicaState {
+@@ -499,6 +716,8 @@ struct GfxRenderingAPIOGL::NativePicaState {
+     std::map<std::pair<uint64_t, uint32_t>, PicaGlDisplay> Displays;
+     std::vector<GfxNativePicaMemoryFillView> PendingFills;
+     std::optional<GfxNativePicaDisplayTransferView> LastPresented;
++    // A display was scanned out since the last EndFrame.
++    bool PresentedThisFrame = false;
+     Oot3d::PicaGeometryRegistry GeometryRegistry;
+     std::unordered_map<uint64_t, PicaGlGeometryBuffer> GeometryBuffers;
+     std::vector<Oot3d::PicaNriSourceVertexStream> GeometrySourceStreams;
+@@ -508,6 +727,17 @@ struct GfxRenderingAPIOGL::NativePicaState {
      GLuint IndexBuffer = 0U;
      GLuint VertexUniformBuffer = 0U;
      GLuint FragmentUniformBuffer = 0U;
@@ -431,7 +504,7 @@ index 6308e40..a06c8fd 100644
      GLuint FallbackColor = 0U;
      GLuint FallbackInteger = 0U;
      GLuint ScanoutProgram = 0U;
-@@ -536,7 +758,7 @@ GfxRenderingAPIOGL::~GfxRenderingAPIOGL() {
+@@ -536,7 +766,7 @@ GfxRenderingAPIOGL::~GfxRenderingAPIOGL() {
  void GfxRenderingAPIOGL::InitNativePica() {
      ShutdownNativePica();
      mNativePica = std::make_unique<NativePicaState>();
@@ -440,7 +513,7 @@ index 6308e40..a06c8fd 100644
      auto& state = *mNativePica;
      state.GeometryCacheEnabled = mNativePicaGeometryCacheEnabled;
      glGenVertexArrays(1, &state.VertexArray);
-@@ -545,6 +767,20 @@ void GfxRenderingAPIOGL::InitNativePica() {
+@@ -545,6 +775,20 @@ void GfxRenderingAPIOGL::InitNativePica() {
      glGenBuffers(1, &state.IndexBuffer);
      glGenBuffers(1, &state.VertexUniformBuffer);
      glGenBuffers(1, &state.FragmentUniformBuffer);
@@ -461,7 +534,7 @@ index 6308e40..a06c8fd 100644
  
      const std::array<uint8_t, 4> white{255U, 255U, 255U, 255U};
      glGenTextures(1, &state.FallbackColor);
-@@ -557,13 +793,12 @@ void GfxRenderingAPIOGL::InitNativePica() {
+@@ -557,13 +801,12 @@ void GfxRenderingAPIOGL::InitNativePica() {
      const uint32_t emptyShadow = 0xFFFFFFFFU;
      glGenTextures(1, &state.FallbackInteger);
      glBindTexture(GL_TEXTURE_2D, state.FallbackInteger);
@@ -477,7 +550,7 @@ index 6308e40..a06c8fd 100644
  out vec2 pica_uv;
  void main() {
      const vec2 positions[3] = vec2[3](
-@@ -573,7 +808,7 @@ void main() {
+@@ -573,7 +816,7 @@ void main() {
      pica_uv = position * 0.5 + 0.5;
  }
  )glsl";
@@ -486,7 +559,7 @@ index 6308e40..a06c8fd 100644
  layout(binding=0) uniform sampler2D pica_scanout;
  uniform int pica_flip_y;
  in vec2 pica_uv;
-@@ -623,7 +858,7 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
+@@ -623,7 +866,7 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
      if (!mNativePica) {
          return;
      }
@@ -495,7 +568,7 @@ index 6308e40..a06c8fd 100644
      auto& state = *mNativePica;
      for (auto& [key, program] : state.Programs) {
          glDeleteProgram(program.Handle);
-@@ -651,12 +886,27 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
+@@ -651,12 +894,27 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
      glDeleteBuffers(1, &state.IndexBuffer);
      glDeleteBuffers(1, &state.VertexUniformBuffer);
      glDeleteBuffers(1, &state.FragmentUniformBuffer);
@@ -523,7 +596,7 @@ index 6308e40..a06c8fd 100644
      mLastLoadedShader = nullptr;
      mCurrentArrayBuffer = 0U;
      mLastActiveTexture = -1;
-@@ -672,7 +922,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
+@@ -672,7 +930,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
  bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
      const Renderer3ds::PicaCompositionSequenceView& sequence,
      std::string* error) {
@@ -532,7 +605,7 @@ index 6308e40..a06c8fd 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -701,7 +951,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
+@@ -701,7 +959,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
  #endif
  }
  
@@ -541,7 +614,7 @@ index 6308e40..a06c8fd 100644
  namespace {
  
  void DeletePicaGlGeometry(
-@@ -763,8 +1013,8 @@ PicaGlTarget& GetPicaGlTarget(
+@@ -763,8 +1021,8 @@ PicaGlTarget& GetPicaGlTarget(
  
          glGenTextures(1, &target.Shadow);
          glBindTexture(GL_TEXTURE_2D, target.Shadow);
@@ -552,7 +625,7 @@ index 6308e40..a06c8fd 100644
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-@@ -927,8 +1177,10 @@ PicaGlTexture& GetPicaGlTexture(
+@@ -927,8 +1185,10 @@ PicaGlTexture& GetPicaGlTexture(
              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,
                              std::min<uint32_t>(texture.MaxMipLevel,
                                                 mipLevels - 1U));
@@ -563,7 +636,7 @@ index 6308e40..a06c8fd 100644
          }
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
                          ToPicaGlWrap(texture.NativeWrapS));
-@@ -1083,7 +1335,7 @@ PicaGlDisplay& GetPicaGlDisplay(
+@@ -1083,7 +1343,7 @@ PicaGlDisplay& GetPicaGlDisplay(
  GfxNativePicaBackendStats
  GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
      GfxNativePicaBackendStats result;
@@ -572,7 +645,7 @@ index 6308e40..a06c8fd 100644
      if (mNativePica != nullptr) {
          result.Available = true;
          const auto registry = mNativePica->GeometryRegistry.Stats();
-@@ -1114,7 +1366,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
+@@ -1114,7 +1374,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
  void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
      bool enabled) noexcept {
      mNativePicaGeometryCacheEnabled = enabled;
@@ -581,7 +654,7 @@ index 6308e40..a06c8fd 100644
      if (mNativePica != nullptr) {
          mNativePica->GeometryCacheEnabled = enabled;
      }
-@@ -1123,9 +1375,60 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
+@@ -1123,9 +1383,60 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
  #endif
  }
  
@@ -643,7 +716,14 @@ index 6308e40..a06c8fd 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1172,18 +1475,21 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1166,24 +1477,28 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+             draw.FramebufferDepthFormat,
+         };
+         ApplyPendingPicaFills(*mNativePica, targetKey, target);
++        ++target.DrawsSinceTransfer;
+ 
+         glBindFramebuffer(GL_FRAMEBUFFER, target.Framebuffer);
+         glDrawBuffer(GL_COLOR_ATTACHMENT0);
          glBindVertexArray(mNativePica->VertexArray);
          glUseProgram(program.Handle);
  
@@ -677,7 +757,7 @@ index 6308e40..a06c8fd 100644
          mNativePica->UniformUploads += 2U;
          mNativePica->UniformUploadBytes += draw.VertexUniformBytes.size() +
                                             draw.FragmentUniformBytes.size();
-@@ -1426,7 +1732,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1426,7 +1741,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                             GL_READ_WRITE, GL_R32UI);
          if (shadowProducer) {
              glDisable(GL_BLEND);
@@ -687,7 +767,7 @@ index 6308e40..a06c8fd 100644
              glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
          } else {
              glColorMask((draw.ColorWriteMask & 1U) != 0U,
-@@ -1435,7 +1743,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1435,7 +1752,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                          (draw.ColorWriteMask & 8U) != 0U);
              if (draw.Blend.Enabled) {
                  glEnable(GL_BLEND);
@@ -698,7 +778,7 @@ index 6308e40..a06c8fd 100644
                  glBlendEquationSeparate(
                      ToPicaGlBlendEquation(draw.Blend.EquationRgb),
                      ToPicaGlBlendEquation(draw.Blend.EquationAlpha));
-@@ -1450,8 +1760,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1450,8 +1769,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                               draw.Blend.ConstantColor[3]);
              } else {
                  glDisable(GL_BLEND);
@@ -709,7 +789,7 @@ index 6308e40..a06c8fd 100644
              }
          }
  
-@@ -1530,7 +1842,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1530,7 +1851,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  }
                  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,
                               persistentGeometryBuffer);
@@ -718,7 +798,7 @@ index 6308e40..a06c8fd 100644
                      topology,
                      static_cast<GLsizei>(
                          preparedGeometry->VertexOrIndexCount),
-@@ -1559,7 +1871,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1559,7 +1880,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  const GLenum type = draw.IndicesAre16Bit
                                          ? GL_UNSIGNED_SHORT
                                          : GL_UNSIGNED_BYTE;
@@ -727,7 +807,7 @@ index 6308e40..a06c8fd 100644
                      topology, static_cast<GLsizei>(indexCount), type, nullptr,
                      draw.BaseVertex);
              }
-@@ -1569,7 +1881,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1569,7 +1890,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  throw std::runtime_error(
                      "PICA non-indexed draw has too many vertices");
              }
@@ -736,7 +816,49 @@ index 6308e40..a06c8fd 100644
                           static_cast<GLsizei>(draw.VertexCount));
          }
          // Ordinary raster and framebuffer commands are ordered by GL. Only
-@@ -1592,7 +1904,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1589,10 +1910,49 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+ #endif
+ }
+ 
++namespace {
++bool sRepresentingLastScanout = false;
++std::atomic<bool> sHalfRateScenes{false};
++bool sHidPreviousScene = false;
++uint32_t sLastSceneDraws = 0U;
++}
++
++// Scenes actually scanned out (FPS counter: picture rate).
++static std::atomic<uint64_t> sPresentedScenes{0};
++uint64_t PicaPresentedSceneCount() noexcept {
++    return sPresentedScenes.load(std::memory_order_relaxed);
++}
++
++void SetPicaHalfRateScenes(bool enabled) noexcept {
++    sHalfRateScenes.store(enabled, std::memory_order_relaxed);
++}
++
++// A frame in which the title presents no new display (half-rate drawing,
++// loads) would show the window's cleared back buffer. The CTR keeps showing
++// its last framebuffer instead: scan the last presented display out again.
++void GfxRenderingAPIOGL::EnsurePicaScanoutPresented() noexcept {
++#if !defined(__APPLE__)
++    if (!mNativePica || !mNativePica->LastPresented || mNativePica->PresentedThisFrame) {
++        return;
++    }
++    const auto transfer = *mNativePica->LastPresented;
++    sRepresentingLastScanout = true;
++    (void)SubmitPicaDisplayTransfer(transfer, nullptr);
++    sRepresentingLastScanout = false;
++    mNativePica->PresentedThisFrame = true;
++#endif
++}
++
++void GfxRenderingAPIOGL::ResetPicaPresentedFrame() noexcept {
++#if !defined(__APPLE__)
++    if (mNativePica) mNativePica->PresentedThisFrame = false;
++#endif
++}
++
  bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
      const GfxNativePicaDisplayTransferView& transfer,
      std::string* error) {
@@ -745,7 +867,54 @@ index 6308e40..a06c8fd 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1686,7 +1998,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+@@ -1642,6 +2002,18 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+         auto& display = GetPicaGlDisplay(
+             *mNativePica, transfer.RenderTargetNamespace,
+             transfer.OutputPhysicalAddress, outputWidth, outputHeight);
++        const uint32_t drawsSinceTransfer = source->second.DrawsSinceTransfer;
++        if (!sRepresentingLastScanout) source->second.DrawsSinceTransfer = 0U;
++        static const bool transferDebug = std::getenv("OOT3D_TRANSFER_DEBUG") != nullptr;
++        if (transferDebug) {
++            std::fprintf(stderr, "[xfer] in=%08x out=%08x draws=%u present=%d content=%d %ux%u\n",
++                         transfer.InputPhysicalAddress, transfer.OutputPhysicalAddress, drawsSinceTransfer,
++                         transfer.Present ? 1 : 0, static_cast<int>(display.ContentDraws), transfer.InputWidth,
++                         transfer.InputHeight);
++        }
++        // EnsurePicaScanoutPresented() re-presents the display as it is.
++        const bool keepPrevious = sRepresentingLastScanout;
++        if (!keepPrevious) {
+         glBindFramebuffer(GL_READ_FRAMEBUFFER, source->second.Framebuffer);
+         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, display.Framebuffer);
+         glDisable(GL_SCISSOR_TEST);
+@@ -1652,8 +2024,26 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+             static_cast<GLint>(outputHeight), GL_COLOR_BUFFER_BIT,
+             scaling == 0U ? GL_NEAREST : GL_LINEAR);
+         display.Initialized = true;
++        if (drawsSinceTransfer > 0U) display.ContentDraws = drawsSinceTransfer;
++        }
+ 
+-        if (transfer.Present) {
++        // Half-rate drawing: a frame whose scene the title skipped holds only
++        // its clear and a few fixed draws (title 1, gameplay 4, against tens
++        // for a scene). Never hide two in a row, so a scene that really has
++        // few draws cannot freeze the picture.
++        const bool emptyScene = !sRepresentingLastScanout && transfer.Present &&
++                                sHalfRateScenes.load(std::memory_order_relaxed) &&
++                                mNativePica->LastPresented.has_value() && !sHidPreviousScene &&
++                                (display.ContentDraws <= 4U ||
++                                 display.ContentDraws * 4U <= sLastSceneDraws);
++        if (transfer.Present && !sRepresentingLastScanout) {
++            sHidPreviousScene = emptyScene;
++            if (!emptyScene) {
++                sLastSceneDraws = display.ContentDraws;
++                sPresentedScenes.fetch_add(1, std::memory_order_relaxed);
++            }
++        }
++        if (transfer.Present && !emptyScene) {
+             SDL_Window* window = SDL_GL_GetCurrentWindow();
+             if (window == nullptr) {
+                 throw std::runtime_error("PICA OpenGL scanout has no SDL window");
+@@ -1686,7 +2076,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
              glDisable(GL_STENCIL_TEST);
              glDisable(GL_CULL_FACE);
              glDisable(GL_SCISSOR_TEST);
@@ -755,7 +924,15 @@ index 6308e40..a06c8fd 100644
              glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
              if (transfer.PresentationMode ==
                  GfxNativePicaPresentationMode::AlphaOverlay) {
-@@ -1733,7 +2047,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+@@ -1719,6 +2111,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+             glBindTexture(GL_TEXTURE_2D, display.Color);
+             glDrawArrays(GL_TRIANGLES, 0, 3);
+             mNativePica->LastPresented = transfer;
++            mNativePica->PresentedThisFrame = true;
+         }
+         InvalidateLegacyStateAfterPica();
+         return true;
+@@ -1733,7 +2126,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
  bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
      uint64_t renderTargetNamespace, uint32_t colorPhysicalAddress,
      std::string* error) {
@@ -764,7 +941,7 @@ index 6308e40..a06c8fd 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1765,7 +2079,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
+@@ -1765,7 +2158,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
  
  bool GfxRenderingAPIOGL::SubmitPicaMemoryFill(
      const GfxNativePicaMemoryFillView& fill, std::string* error) {
@@ -773,7 +950,7 @@ index 6308e40..a06c8fd 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1802,7 +2116,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
+@@ -1802,7 +2195,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
          SetPicaGlError(error, "PICA completion identity is invalid");
          return false;
      }
@@ -782,7 +959,7 @@ index 6308e40..a06c8fd 100644
      // SubmitPicaDraw has already copied every guest source span into
      // backend-owned GL buffers/textures. A completion acknowledges that copy;
      // it does not need to idle the GPU. GL preserves command ordering through
-@@ -1826,7 +2140,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
+@@ -1826,7 +2219,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
          if (!mNativePica) {
              throw std::runtime_error("PICA OpenGL backend is not initialized");
          }
@@ -792,17 +969,10 @@ index 6308e40..a06c8fd 100644
  #endif
          InitNativePica();
 diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
-index 5938cd9..682b09c 100644
+index 5938cd9..78c518a 100644
 --- a/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
 +++ b/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
-@@ -1,5 +1,6 @@
- #if defined(ENABLE_OPENGL) || defined(__APPLE__)
- 
-+#include <atomic>
- #include <algorithm>
- #include <stdio.h>
- #include <stdexcept>
-@@ -416,6 +417,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -416,6 +416,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
      SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -814,7 +984,7 @@ index 5938cd9..682b09c 100644
  #endif
  
  #ifdef _WIN32
-@@ -521,6 +527,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -521,6 +526,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          }
  
          SDL_GL_MakeCurrent(mWnd, mCtx);
@@ -826,25 +996,10 @@ index 5938cd9..682b09c 100644
  #ifdef __SWITCH__
          if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
              throw std::runtime_error(std::string("Switch OpenGL loader initialization failed: ") + SDL_GetError());
-@@ -884,6 +895,13 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
-     previous_time = t;
- }
- 
-+// R36S half-rate drawing: a frame whose 3D scene the game did not draw is not
-+// presented, so the window keeps showing the previous picture.
-+static std::atomic<bool> sSuppressNextSwap{false};
-+void SetSuppressNextSwap(bool suppress) noexcept {
-+    sSuppressNextSwap.store(suppress, std::memory_order_relaxed);
-+}
-+
- void GfxWindowBackendSDL2::SwapBuffersBegin() {
-     bool nextVsyncEnabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_VSYNC_ENABLED, 1);
- 
-@@ -904,7 +922,25 @@ void GfxWindowBackendSDL2::SwapBuffersBegin() {
+@@ -904,6 +914,22 @@ void GfxWindowBackendSDL2::SwapBuffersBegin() {
          if (mTargetFps != 0U) {
              SyncFramerateWithTime();
          }
--        SDL_GL_SwapWindow(mWnd);
 +        // OOT3D_GL_FINISH_TIMING=1 (diagnostics): wait for the GPU before the
 +        // swap and report how long that wait takes, i.e. the GPU tail per frame.
 +        static const bool finishTiming = getenv("OOT3D_GL_FINISH_TIMING") != nullptr;
@@ -861,12 +1016,159 @@ index 5938cd9..682b09c 100644
 +                frames = 0U;
 +            }
 +        }
-+        if (!sSuppressNextSwap.exchange(false, std::memory_order_relaxed)) {
-+            SDL_GL_SwapWindow(mWnd);
-+        }
+         SDL_GL_SwapWindow(mWnd);
      }
  }
+diff --git a/runtime/three_ds_recomp/src/ship/audio/SDLAudioPlayer.cpp b/runtime/three_ds_recomp/src/ship/audio/SDLAudioPlayer.cpp
+index bd6311b..db41dd1 100644
+--- a/runtime/three_ds_recomp/src/ship/audio/SDLAudioPlayer.cpp
++++ b/runtime/three_ds_recomp/src/ship/audio/SDLAudioPlayer.cpp
+@@ -1,6 +1,12 @@
+ #include "ship/audio/SDLAudioPlayer.h"
+ #include <spdlog/spdlog.h>
  
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cmath>
++#include <vector>
++
+ namespace Ship {
+ 
+ SDLAudioPlayer::~SDLAudioPlayer() {
+@@ -53,7 +59,132 @@ int SDLAudioPlayer::Buffered() {
+     return SDL_GetQueuedAudioSize(mDevice) / (sizeof(int16_t) * mNumChannels);
+ }
+ 
++// R36S "Audio stretching" (tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp).
++std::atomic<bool> gAudioStretchEnabled{false};
++
++namespace {
++
++// WSOLA time stretching, as emulators do while the game runs slower than
++// real time: the audio is lengthened by repeating overlapped grains chosen
++// to continue the waveform, so the pitch stays and the gaps disappear.
++class AudioStretcher {
++  public:
++    void Reset() {
++        mInput.clear();
++        mTail.clear();
++        mInputPosition = 0.0;
++        mLastGrain = -1;
++        mProducedFrames = 0;
++        mWindowStart = Clock::now();
++        mFactor = 1.0;
++    }
++
++    // Interleaved int16 frames in, stretched frames out (appended).
++    void Process(const int16_t* samples, size_t frames, int channels, int sampleRate, std::vector<int16_t>& output) {
++        if (channels != mChannels) {
++            mChannels = channels;
++            Reset();
++        }
++        mInput.insert(mInput.end(), samples, samples + frames * channels);
++        UpdateFactor(frames, sampleRate);
++        const int hop = kGrain / 2;
++        const double analysisHop = hop / mFactor;
++        while (true) {
++            const auto nominal = static_cast<long>(mInputPosition);
++            const long searchStart = std::max(0L, nominal - kSearch);
++            if ((nominal + kSearch + kGrain) * channels > static_cast<long>(mInput.size())) break;
++            long grain = nominal;
++            if (mLastGrain >= 0) {
++                // The natural continuation of the previous grain.
++                const long reference = mLastGrain + hop;
++                double best = -1.0e300;
++                for (long candidate = searchStart; candidate <= nominal + kSearch; candidate += 4) {
++                    double correlation = 0.0;
++                    for (int i = 0; i < hop; i += 16) {
++                        correlation += Mono(reference + i) * Mono(candidate + i);
++                    }
++                    if (correlation > best) {
++                        best = correlation;
++                        grain = candidate;
++                    }
++                }
++            }
++            // Overlap-add: Hann window, 50 % overlap.
++            if (mTail.size() != static_cast<size_t>(hop * channels)) mTail.assign(hop * channels, 0.0F);
++            for (int i = 0; i < hop; ++i) {
++                const float rise = 0.5F - 0.5F * std::cos(3.14159265F * i / hop);
++                for (int c = 0; c < channels; ++c) {
++                    const float value = mTail[i * channels + c] + rise * Sample(grain + i, c);
++                    output.push_back(static_cast<int16_t>(std::clamp(value, -32768.0F, 32767.0F)));
++                    mTail[i * channels + c] = (1.0F - rise) * Sample(grain + hop + i, c);
++                }
++            }
++            mLastGrain = grain;
++            mInputPosition += analysisHop;
++            // Drop input no future grain can reach.
++            const long keep = std::min(static_cast<long>(mInputPosition) - kSearch, mLastGrain) - 1;
++            if (keep > 0) {
++                mInput.erase(mInput.begin(), mInput.begin() + keep * channels);
++                mInputPosition -= keep;
++                mLastGrain -= keep;
++            }
++        }
++    }
++
++  private:
++    using Clock = std::chrono::steady_clock;
++    static constexpr int kGrain = 1024;
++    static constexpr long kSearch = 128;
++
++    float Sample(long frame, int channel) const { return mInput[frame * mChannels + channel]; }
++    float Mono(long frame) const {
++        float sum = 0.0F;
++        for (int c = 0; c < mChannels; ++c) sum += Sample(frame, c);
++        return sum;
++    }
++    // Stretch by real time over produced audio time, measured each second.
++    void UpdateFactor(size_t frames, int sampleRate) {
++        mProducedFrames += frames;
++        const double seconds = std::chrono::duration<double>(Clock::now() - mWindowStart).count();
++        if (seconds < 1.0) return;
++        const double produced = static_cast<double>(mProducedFrames) / sampleRate;
++        const double target = produced > 0.0 ? std::clamp(seconds / produced, 1.0, 2.5) : 1.0;
++        mFactor = mFactor * 0.5 + target * 0.5;
++        mProducedFrames = 0;
++        mWindowStart = Clock::now();
++    }
++
++    std::vector<int16_t> mInput;
++    std::vector<float> mTail;
++    double mInputPosition = 0.0;
++    long mLastGrain = -1;
++    int mChannels = 0;
++    size_t mProducedFrames = 0;
++    Clock::time_point mWindowStart = Clock::now();
++    double mFactor = 1.0;
++};
++
++AudioStretcher sStretcher;
++bool sStretching = false;
++
++} // namespace
++
+ void SDLAudioPlayer::DoPlay(const uint8_t* buf, size_t len) {
++    if (gAudioStretchEnabled.load(std::memory_order_relaxed)) {
++        if (!sStretching) {
++            sStretcher.Reset();
++            sStretching = true;
++        }
++        static std::vector<int16_t> stretched;
++        stretched.clear();
++        const size_t frames = len / (sizeof(int16_t) * mNumChannels);
++        sStretcher.Process(reinterpret_cast<const int16_t*>(buf), frames, mNumChannels, GetSampleRate(), stretched);
++        if (!stretched.empty() && Buffered() < 6000) {
++            SDL_QueueAudio(mDevice, stretched.data(), static_cast<Uint32>(stretched.size() * sizeof(int16_t)));
++        }
++        return;
++    }
++    sStretching = false;
+     if (Buffered() < 6000) {
+         // Don't fill the audio buffer too much in case this happens
+         SDL_QueueAudio(mDevice, buf, len);
 diff --git a/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py b/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py
 index fed3de8..f509913 100644
 --- a/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py
@@ -1108,7 +1410,7 @@ index 42f991d..3fb2c81 100644
          ]
      )
 diff --git a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
-index 6c029b6..f2ef8fc 100644
+index 6c029b6..870497c 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
 @@ -1,6 +1,7 @@
@@ -1127,7 +1429,7 @@ index 6c029b6..f2ef8fc 100644
  #include <functional>
  #include <utility>
  
-@@ -834,6 +836,30 @@ void InGameMenu::BuildGameTab(Menu::Document &document) {
+@@ -834,6 +836,38 @@ void InGameMenu::BuildGameTab(Menu::Document &document) {
      tab.Rows.push_back(action("Load last state + settings", "Loads the most recent save state and applies the settings it carries.",
                                SavestateRequestKind::Load, true));
    }
@@ -1155,10 +1457,18 @@ index 6c029b6..f2ef8fc 100644
 +                                &R36sPerformanceSettings::HalfRateDraw));
 +  tab.Rows.push_back(r36sToggle("Simple audio", "Cheaper sound mixing without sample interpolation. Slightly rougher "
 +                                "music and effects. Faster.", &R36sPerformanceSettings::SimpleAudio));
++  tab.Rows.push_back(r36sToggle("Audio stretching",
++                                "While the game runs slower than real time, sound is stretched instead of breaking "
++                                "up, as emulators do. Keeps the pitch; can sound slightly echoey. Uses some CPU.",
++                                &R36sPerformanceSettings::AudioStretch));
++  tab.Rows.push_back(r36sToggle("Show FPS",
++                                "Shows the game speed (frames of game logic per second) and the picture rate at the "
++                                "top of the screen. The original runs at 30.",
++                                &R36sPerformanceSettings::ShowFps));
    document.Tabs.push_back(std::move(tab));
  }
  
-@@ -894,8 +920,17 @@ void InGameMenu::UpdateSavestateOutcome() {
+@@ -894,8 +928,17 @@ void InGameMenu::UpdateSavestateOutcome() {
  }
  
  void InGameMenu::Update(const InGameMenuHostInput &input, bool hostGuiOwnsInput, double elapsedSeconds) {
@@ -1274,15 +1584,16 @@ index d876a6d..372355a 100644
      phaseTiming.PicaBackendSeconds += workerPhaseTiming.PicaBackendSeconds;
      phaseTiming.VisualReplaySeconds += workerPhaseTiming.VisualReplaySeconds;
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_frame.cpp b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_frame.cpp
-index 0102691..e766222 100644
+index 0102691..9df4b9b 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_frame.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_frame.cpp
-@@ -1,8 +1,14 @@
+@@ -1,8 +1,15 @@
  // Native A32 window session: one frame of the loop and the renderer-side work it schedules.
  #include "oot3d_native_a32_window_session.h"
++#include "oot3d_menu_font.h"
 +#include "oot3d_r36s_performance.h"
 +namespace Fast {
-+void SetSuppressNextSwap(bool suppress) noexcept;
++uint64_t PicaPresentedSceneCount() noexcept; // fast/backends/gfx_opengl_pica.cpp
 +}
  #include "fast/renderer3ds/pica_surface_debug.h"
  #include "oot3d/renderer/ui_presentation_layout.h"
@@ -1292,7 +1603,61 @@ index 0102691..e766222 100644
  
  namespace Oot3dA32Window {
  
-@@ -582,6 +588,12 @@ bool NativeA32WindowSession::RunFrame() {
+@@ -578,10 +585,66 @@ bool NativeA32WindowSession::RunFrame() {
+       }
+     });
+   }
++  // R36S "Show FPS": game frames (logic) and scanned-out pictures per second,
++  // refreshed every second, on a small dimmed strip at the top centre.
++  if (Oot3dNativeGame::R36sPerformance::Instance().ShowFps()) {
++    using Clock = std::chrono::steady_clock;
++    static Clock::time_point windowStart = Clock::now();
++    static unsigned windowFrames = 0U;
++    static uint64_t windowScenes = Fast::PicaPresentedSceneCount();
++    static std::string fpsText = "FPS --";
++    ++windowFrames;
++    const double seconds = std::chrono::duration<double>(Clock::now() - windowStart).count();
++    if (seconds >= 1.0) {
++      const uint64_t scenes = Fast::PicaPresentedSceneCount();
++      std::array<char, 64> text{};
++      std::snprintf(text.data(), text.size(), "FPS %.1f  |  IMAGEN %.1f", windowFrames / seconds,
++                    static_cast<double>(scenes - windowScenes) / seconds);
++      fpsText = text.data();
++      windowStart = Clock::now();
++      windowFrames = 0U;
++      windowScenes = scenes;
++    }
++    constexpr float kCanvasWidth = 1280.0F / 3.0F;
++    constexpr float kTextSize = 8.0F;
++    std::vector<oot3d::ui::UiPrimitive> fpsPrimitives;
++    const float width = Oot3dNativeGame::Menu::MeasureText(Oot3dNativeGame::Menu::FontStyle::Body, kTextSize, fpsText) + 8.0F;
++    oot3d::ui::UiPrimitive strip;
++    strip.subsystem = oot3d::ui::UiSubsystem::GameplayHud;
++    strip.role = oot3d::ui::UiPrimitiveRole::PauseBackground;
++    strip.destination = {(kCanvasWidth - width) * 0.5F, 2.0F, width, kTextSize + 4.0F};
++    strip.color = {0.0F, 0.0F, 0.0F, 0.55F};
++    fpsPrimitives.push_back(std::move(strip));
++    Oot3dNativeGame::Menu::TextStyle style;
++    style.Font = Oot3dNativeGame::Menu::FontStyle::Body;
++    style.Size = kTextSize;
++    style.Color = {0.95F, 0.92F, 0.6F, 1.0F};
++    style.Align = Oot3dNativeGame::Menu::TextAlign::Center;
++    style.Layer = 1U;
++    Oot3dNativeGame::Menu::AppendText(fpsPrimitives, style, kCanvasWidth * 0.5F, 2.0F + kTextSize, fpsText);
++    auto fpsTextures = n64UiRenderer.PrepareTextures(fpsPrimitives);
++    renderStream.Submit([&, primitives = std::move(fpsPrimitives), uiRegion,
++                         prepared = std::move(fpsTextures)]() mutable {
++      if (rendererFrameSkipped) {
++        n64UiRenderer.Stage(std::move(prepared));
++        return;
++      }
++      if (!n64UiRenderer.Render(primitives, uiRegion, oot3d::ui::N64UiCanvasMode::Widescreen16x9,
++                                std::move(prepared), &renderError)) {
++        throw std::runtime_error("FPS counter presentation failed: " + renderError);
++      }
++    });
++  }
+   // The in-game menu draws last in the UI domain, over the HUD and the
    // native text, on the widescreen canvas so its dim covers the window.
    if (inGameMenu.IsOpen()) {
      auto menuPrimitives = inGameMenu.BuildPresentation(1280.0F / 3.0F, 240.0F);
@@ -1305,30 +1670,15 @@ index 0102691..e766222 100644
      auto menuTextures = n64UiRenderer.PrepareTextures(menuPrimitives);
      renderStream.Submit([&, primitives = std::move(menuPrimitives), uiRegion,
                           prepared = std::move(menuTextures)]() mutable {
-@@ -603,10 +615,13 @@ bool NativeA32WindowSession::RunFrame() {
-   preparationScreen.Draw(preparationStatus);
-   gui->EndDraw();
-   presentSteps.Mark("gui_end_draw");
--  renderStream.Submit([&, width, height,
-+  // R36S half-rate drawing: a frame without a drawn scene is not presented.
-+  const bool drawSkipped = Oot3dNativeGame::R36sPerformance::Instance().ConsumeDrawSkipped();
-+  renderStream.Submit([&, width, height, drawSkipped,
+@@ -607,6 +670,8 @@ bool NativeA32WindowSession::RunFrame() {
                         presentationSerial = presentationFrameCount,
                         forcedScreenshot = std::exchange(pendingForcedScreenshot, {})] {
      if (!forcedScreenshot.empty()) screenshotState.ForcedPath = forcedScreenshot;
-+    if (drawSkipped) Fast::SetSuppressNextSwap(true);
++    // A frame without a new scanout keeps the last scene (half-rate drawing).
++    if (!rendererFrameSkipped) api.EnsureNativeScenePresented();
      if (rendererFrameSkipped) {
        capturedTemporalSample.reset();
        window.EndFrame();
-@@ -614,7 +629,7 @@ bool NativeA32WindowSession::RunFrame() {
-       inputLatencyTrace.DiscardPending(presentationSerial);
-       return;
-     }
--    MaybeWriteFramebufferScreenshot(
-+    if (!drawSkipped) MaybeWriteFramebufferScreenshot(
-         hostArgs, api, width, height,
-         static_cast<uint32_t>(presentationSerial), screenshotState,
-         capturedTemporalSample ? &*capturedTemporalSample : nullptr);
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_input.cpp b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_input.cpp
 index bddcb6b..9a9d746 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_input.cpp
@@ -1647,10 +1997,10 @@ index 080be30..2e9cae5 100644
  } // namespace Oot3dNativeGame
 diff --git a/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp
 new file mode 100644
-index 0000000..6ad274f
+index 0000000..c7a0b5b
 --- /dev/null
 +++ b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,111 @@
 +#include "oot3d_r36s_performance.h"
 +
 +#include <nlohmann/json.hpp>
@@ -1662,19 +2012,31 @@ index 0000000..6ad274f
 +extern std::atomic<bool> gSimpleInterpolation; // audio_core/hle/source.cpp
 +}
 +
++namespace Ship {
++extern std::atomic<bool> gAudioStretchEnabled; // ship/audio/SDLAudioPlayer.cpp
++}
++
++namespace Fast {
++void SetPicaHalfRateScenes(bool enabled) noexcept; // fast/backends/gfx_opengl_pica.cpp
++}
++
 +namespace Oot3dNativeGame {
 +namespace {
 +
-+constexpr const char* kKeys[] = {"HalfRateDraw", "SimpleAudio", "ParallelFrontend", "ReducedActors"};
++constexpr const char* kKeys[] = {"HalfRateDraw", "SimpleAudio", "ParallelFrontend", "ReducedActors",
++                                 "ShowFps", "AudioStretch"};
 +constexpr const char* kEnvironment[] = {"OOT3D_HALF_RATE_DRAW", "OOT3D_SIMPLE_AUDIO",
-+                                        "OOT3D_PARALLEL_FRONTEND", "OOT3D_REDUCED_ACTORS"};
++                                        "OOT3D_PARALLEL_FRONTEND", "OOT3D_REDUCED_ACTORS",
++                                        "OOT3D_SHOW_FPS", "OOT3D_AUDIO_STRETCH"};
 +
 +bool* Field(R36sPerformanceSettings& settings, size_t index) noexcept {
 +    switch (index) {
 +    case 0: return &settings.HalfRateDraw;
 +    case 1: return &settings.SimpleAudio;
 +    case 2: return &settings.ParallelFrontend;
-+    default: return &settings.ReducedActors;
++    case 3: return &settings.ReducedActors;
++    case 4: return &settings.ShowFps;
++    default: return &settings.AudioStretch;
 +    }
 +}
 +
@@ -1710,11 +2072,15 @@ index 0000000..6ad274f
 +    mSimpleAudio.store(settings.SimpleAudio, std::memory_order_relaxed);
 +    mParallelFrontend.store(settings.ParallelFrontend, std::memory_order_relaxed);
 +    mReducedActors.store(settings.ReducedActors, std::memory_order_relaxed);
++    mShowFps.store(settings.ShowFps, std::memory_order_relaxed);
++    mAudioStretch.store(settings.AudioStretch, std::memory_order_relaxed);
 +    AudioCore::HLE::gSimpleInterpolation.store(settings.SimpleAudio, std::memory_order_relaxed);
++    Fast::SetPicaHalfRateScenes(settings.HalfRateDraw);
++    Ship::gAudioStretchEnabled.store(settings.AudioStretch, std::memory_order_relaxed);
 +}
 +
 +R36sPerformanceSettings R36sPerformance::Get() const noexcept {
-+    return {HalfRateDraw(), SimpleAudio(), ParallelFrontend(), ReducedActors()};
++    return {HalfRateDraw(), SimpleAudio(), ParallelFrontend(), ReducedActors(), ShowFps(), AudioStretch()};
 +}
 +
 +bool R36sPerformance::Set(const R36sPerformanceSettings& settings, std::string* error) {
@@ -1740,7 +2106,7 @@ index 0000000..6ad274f
 +    auto& performance = R36sPerformance::Instance();
 +    if (!performance.HalfRateDraw()) return false;
 +    if ((calls++ & 1U) == 0U) return false;
-+    performance.MarkDrawSkipped();
++    // gfx_opengl_pica.cpp keeps the last scene on screen for this frame.
 +    return true;
 +}
 +
@@ -1748,10 +2114,10 @@ index 0000000..6ad274f
 +} // namespace Oot3dNativeGame
 diff --git a/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h
 new file mode 100644
-index 0000000..3ea0c96
+index 0000000..43f32bc
 --- /dev/null
 +++ b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,63 @@
 +#pragma once
 +
 +// Performance options of the R36S (RK3326) port, shown in the in-game menu
@@ -1759,11 +2125,12 @@ index 0000000..3ea0c96
 +//
 +// Environment overrides, for A/B measurements (1 on, 0 off):
 +//   OOT3D_HALF_RATE_DRAW, OOT3D_SIMPLE_AUDIO, OOT3D_PARALLEL_FRONTEND,
-+//   OOT3D_REDUCED_ACTORS; OOT3D_R36S_CONFIG overrides the file path.
++//   OOT3D_REDUCED_ACTORS, OOT3D_SHOW_FPS, OOT3D_AUDIO_STRETCH; OOT3D_R36S_CONFIG overrides the file path.
 +
 +#include <atomic>
 +#include <filesystem>
 +#include <string>
++#include <utility>
 +
 +namespace Oot3dNativeGame {
 +
@@ -1779,6 +2146,10 @@ index 0000000..3ea0c96
 +    // Reserved (not implemented: the visibility hook can only widen the
 +    // title's culling, and narrowing it safely needs per-actor rules).
 +    bool ReducedActors = false;
++    // On-screen counter: game (logic) and picture frames per second.
++    bool ShowFps = false;
++    // Audio time stretching while the game runs slower than real time.
++    bool AudioStretch = true;
 +};
 +
 +class R36sPerformance {
@@ -1793,17 +2164,8 @@ index 0000000..3ea0c96
 +    bool SimpleAudio() const noexcept { return mSimpleAudio.load(std::memory_order_relaxed); }
 +    bool ParallelFrontend() const noexcept { return mParallelFrontend.load(std::memory_order_relaxed); }
 +    bool ReducedActors() const noexcept { return mReducedActors.load(std::memory_order_relaxed); }
-+
-+    // Half-rate drawing: Gameplay_Draw was skipped this frame (set by the
-+    // gate). The CTR presents a scene one frame after drawing it, so the
-+    // frame to hide is the next one: called once per presented frame (main
-+    // thread), this answers whether the previous frame skipped its draw.
-+    void MarkDrawSkipped() noexcept { mDrawSkipped.store(true, std::memory_order_relaxed); }
-+    bool ConsumeDrawSkipped() noexcept {
-+        const bool previous = mPreviousDrawSkipped;
-+        mPreviousDrawSkipped = mDrawSkipped.exchange(false, std::memory_order_relaxed);
-+        return previous;
-+    }
++    bool ShowFps() const noexcept { return mShowFps.load(std::memory_order_relaxed); }
++    bool AudioStretch() const noexcept { return mAudioStretch.load(std::memory_order_relaxed); }
 +
 +  private:
 +    R36sPerformance();
@@ -1814,8 +2176,8 @@ index 0000000..3ea0c96
 +    std::atomic<bool> mSimpleAudio{true};
 +    std::atomic<bool> mParallelFrontend{false};
 +    std::atomic<bool> mReducedActors{false};
-+    std::atomic<bool> mDrawSkipped{false};
-+    bool mPreviousDrawSkipped = false;
++    std::atomic<bool> mShowFps{false};
++    std::atomic<bool> mAudioStretch{true};
 +};
 +
 +} // namespace Oot3dNativeGame
@@ -1884,7 +2246,7 @@ index 634a3b1..ec05dea 100644
  struct Palette {
      oot3d::ui::UiColor Text{224.0F / 255.0F, 219.0F / 255.0F, 200.0F / 255.0F, 1.0F};
 diff --git a/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.cpp b/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.cpp
-index e8c7f5b..596e2fe 100644
+index e8c7f5b..5cc1fef 100644
 --- a/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.cpp
 +++ b/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.cpp
 @@ -4,16 +4,56 @@
@@ -1946,7 +2308,15 @@ index e8c7f5b..596e2fe 100644
      sampler.MagFilter = Fast::GfxNativeTextureFilter::Linear;
      sampler.WrapS = Fast::GfxNativeTextureWrap::ClampToEdge;
      sampler.WrapT = Fast::GfxNativeTextureWrap::ClampToEdge;
-@@ -71,17 +111,31 @@ std::uint32_t Fast3dUiRenderBackend::CreateUiTexture(
+@@ -36,6 +76,7 @@ Fast3dUiRenderBackend::Fast3dUiRenderBackend(
+ 
+ bool Fast3dUiRenderBackend::PrepareUiOverlay(
+     const Oot3d::Renderer::UiOverlayViewport& viewport, std::string* error) {
++    rendering_api_.EnsureNativeScenePresented();
+     if (title_render_backend_ != nullptr &&
+         !title_render_backend_->PrepareOverlay(error)) {
+         return false;
+@@ -71,17 +112,31 @@ std::uint32_t Fast3dUiRenderBackend::CreateUiTexture(
      }
      const std::uint32_t textureId = rendering_api_.NewTexture();
      rendering_api_.SelectTexture(0, textureId);
@@ -1980,7 +2350,7 @@ index e8c7f5b..596e2fe 100644
          rendering_api_.DeleteTexture(textureId);
      }
  }
-@@ -138,7 +192,9 @@ bool Fast3dUiRenderBackend::Draw(
+@@ -138,7 +193,9 @@ bool Fast3dUiRenderBackend::Draw(
      const bool textured = textureId != 0U;
      if (textured) {
          rendering_api_.SelectTexture(0, textureId);

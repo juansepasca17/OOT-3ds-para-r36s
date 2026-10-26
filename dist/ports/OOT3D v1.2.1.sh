@@ -4,6 +4,8 @@
 # Version 1.1.0 (2026-10-26): CPU y GPU en paralelo (TRIAEVUM_INPUT_ADMISSION=0), ~13 fps.
 # Version 1.2.0 (2026-10-26): HUD y menu Fn visibles; dibujo a medio ritmo y audio simple
 #   (activados por defecto, Fn > Game > R36S performance); +17 % de velocidad.
+# Version 1.2.1 (2026-10-26): sin cuadros negros con el dibujo a medio ritmo, contador de FPS
+#   (Show FPS) y audio estirado (Audio stretching, activado); ~15.9 fps de logica.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
