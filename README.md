@@ -9,7 +9,7 @@ con el renderer portado a **OpenGL ES 3.2**.
 
 | Rama | Qué es |
 |---|---|
-| **`estable`** (tag `v1.1.0`) | Versión jugable recomendada: ~11,7 fps en la R36S |
+| **`estable`** (tag `v1.2.0`) | Versión jugable recomendada: ~14 fps de lógica en la R36S, HUD y menú Fn visibles |
 | `main` | Desarrollo: optimizaciones del traductor en curso ([docs/TRADUCTOR_V2.md](docs/TRADUCTOR_V2.md)). Puede estar a medias |
 
 ## Estado (v1.0, 2026-10-25)
@@ -89,8 +89,8 @@ contexto (con Mesa pasan desapercibidas, pero en Mali corrompen el driver).
 
 ## Instalar en la R36S
 
-Copiar `dist/ports/OOT3D v1.1.0.sh` y la carpeta `dist/ports/oot3d/` a `/roms/ports/` de la SD
-(`EASYROMS\ports\` en Windows). Aparece en **Ports → OOT3D v1.1.0**.
+Copiar `dist/ports/OOT3D v1.2.0.sh` y la carpeta `dist/ports/oot3d/` a `/roms/ports/` de la SD
+(`EASYROMS\ports\` en Windows). Aparece en **Ports → OOT3D v1.2.0**.
 - La primera vez compila shaders (unos minutos); quedan guardados en `oot3d/shadercache/`.
 - **Select + Start** sale. La partida va en `oot3d/savedata/`.
 - `dist/ports/OOT3D-Info.sh` registra los datos de la consola en `ports/oot3d_info.txt`.

@@ -10,7 +10,7 @@ aceptación, comandos y trampas conocidas. Última actualización: **2026-10-26 
 
 | Qué | Dónde | Estado |
 |---|---|---|
-| **Versión jugable** | Rama **`estable`** = tag **`v1.1.0`**; en la SD: `Ports → OOT3D v1.1.0` | **11,7 fps** (85 ms/frame), sin cambios visuales |
+| **Versión jugable** | Rama **`estable`** = tag **`v1.2.0`**; en la SD: `Ports → OOT3D v1.2.0` | **14,3 fps** de lógica (69,8 ms), HUD y menú Fn visibles |
 | Desarrollo | Rama `main` | v1.1.0 + coma flotante rápida (exacta, sin efecto medible) + herramientas + debug menú |
 | Límite actual | CPU de la consola (hilo principal) | Código del juego traducido ~38 %, frontend PICA ~9 % (+5 % en render) |
 | Binario en el servidor | `work/devserver/files/oot3d_r36s-menu.gz` | Build de depuración del menú Fn (C1), **aún no probado** |
@@ -220,6 +220,7 @@ las llamadas de la ruta lenta.
 | Versión | p50 | fps | Nota |
 |---|---|---|---|
 | v1.0.0 | 129 ms | 7,7 | CPU y GPU por turnos |
+| **v1.2.0** | 69,8 ms | 14,3 | D3 dibujo a medio ritmo + D2 audio simple (con audio) |
 | **v1.1.0** | 83–85 ms | 11,7–12,0 | `TRIAEVUM_INPUT_ADMISSION=0` |
 | main (coma flotante rápida) | 84,4 ms | 11,8 | Sin cambio (ruido) |
 

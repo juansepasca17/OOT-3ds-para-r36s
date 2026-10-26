@@ -225,3 +225,10 @@ Conclusión: el costo está en el código generado → traductor v2 (`docs/TRADU
   ese frame (sin `SDL_GL_SwapWindow`; la pantalla conserva la imagen anterior).
 - Consola (trabajo 013, A/B x2, demo de título): apagado 79,7 ms (12,5 fps) → encendido **68,8 ms (14,5 fps,
   +15,8 %)** de lógica; la imagen se actualiza a la mitad.
+
+### v1.2.0 (2026-10-26)
+- D2 audio simple: `AudioCore::HLE::gSimpleInterpolation` fuerza interpolación "None" en el mezclador HLE.
+- D1 (frontend PICA en otro núcleo) y "menos actores": **descartados** (ver `docs/TRADUCTOR_V2.md`).
+- Consola, trabajo 014 (con audio, A/B x2): v1.1.0 81,8 ms (12,2 fps) → **v1.2.0 69,8 ms (14,3 fps), +17,2 %**;
+  v1.2.0 con audio de alta calidad 70,6 ms (+15,8 %).
+- Instalada en la SD como `OOT3D v1.2.0.sh` (binario v1.1.0 guardado en `oot3d/dev/old/`).

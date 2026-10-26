@@ -1108,7 +1108,7 @@ index 42f991d..3fb2c81 100644
          ]
      )
 diff --git a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
-index 6c029b6..f22fd37 100644
+index 6c029b6..f2ef8fc 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
 @@ -1,6 +1,7 @@
@@ -1127,7 +1127,7 @@ index 6c029b6..f22fd37 100644
  #include <functional>
  #include <utility>
  
-@@ -834,6 +836,37 @@ void InGameMenu::BuildGameTab(Menu::Document &document) {
+@@ -834,6 +836,30 @@ void InGameMenu::BuildGameTab(Menu::Document &document) {
      tab.Rows.push_back(action("Load last state + settings", "Loads the most recent save state and applies the settings it carries.",
                                SavestateRequestKind::Load, true));
    }
@@ -1155,17 +1155,10 @@ index 6c029b6..f22fd37 100644
 +                                &R36sPerformanceSettings::HalfRateDraw));
 +  tab.Rows.push_back(r36sToggle("Simple audio", "Cheaper sound mixing without sample interpolation. Slightly rougher "
 +                                "music and effects. Faster.", &R36sPerformanceSettings::SimpleAudio));
-+  tab.Rows.push_back(r36sToggle("Parallel draw processing",
-+                                "Prepares the drawing commands on another CPU core. No visual change. Faster.",
-+                                &R36sPerformanceSettings::ParallelFrontend));
-+  tab.Rows.push_back(r36sToggle("Reduced actor distance",
-+                                "Draws and updates characters and objects at a shorter distance. Distant ones "
-+                                "pop in later and gameplay can differ. Faster.",
-+                                &R36sPerformanceSettings::ReducedActors));
    document.Tabs.push_back(std::move(tab));
  }
  
-@@ -894,8 +927,17 @@ void InGameMenu::UpdateSavestateOutcome() {
+@@ -894,8 +920,17 @@ void InGameMenu::UpdateSavestateOutcome() {
  }
  
  void InGameMenu::Update(const InGameMenuHostInput &input, bool hostGuiOwnsInput, double elapsedSeconds) {
@@ -1654,16 +1647,20 @@ index 080be30..2e9cae5 100644
  } // namespace Oot3dNativeGame
 diff --git a/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp
 new file mode 100644
-index 0000000..2456904
+index 0000000..6ad274f
 --- /dev/null
 +++ b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,95 @@
 +#include "oot3d_r36s_performance.h"
 +
 +#include <nlohmann/json.hpp>
 +
 +#include <cstdlib>
 +#include <fstream>
++
++namespace AudioCore::HLE {
++extern std::atomic<bool> gSimpleInterpolation; // audio_core/hle/source.cpp
++}
 +
 +namespace Oot3dNativeGame {
 +namespace {
@@ -1713,6 +1710,7 @@ index 0000000..2456904
 +    mSimpleAudio.store(settings.SimpleAudio, std::memory_order_relaxed);
 +    mParallelFrontend.store(settings.ParallelFrontend, std::memory_order_relaxed);
 +    mReducedActors.store(settings.ReducedActors, std::memory_order_relaxed);
++    AudioCore::HLE::gSimpleInterpolation.store(settings.SimpleAudio, std::memory_order_relaxed);
 +}
 +
 +R36sPerformanceSettings R36sPerformance::Get() const noexcept {
@@ -1750,10 +1748,10 @@ index 0000000..2456904
 +} // namespace Oot3dNativeGame
 diff --git a/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h
 new file mode 100644
-index 0000000..527f1b0
+index 0000000..3ea0c96
 --- /dev/null
 +++ b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,67 @@
 +#pragma once
 +
 +// Performance options of the R36S (RK3326) port, shown in the in-game menu
@@ -1775,9 +1773,11 @@ index 0000000..527f1b0
 +    bool HalfRateDraw = true;
 +    // Cheaper audio mixing (no sample interpolation).
 +    bool SimpleAudio = true;
-+    // PICA command processing on a worker core.
-+    bool ParallelFrontend = true;
-+    // Actors drawn and updated at a shorter distance.
++    // Reserved (not implemented: the PICA frontend reads guest memory at
++    // submission; a worker would need copies of command lists and geometry).
++    bool ParallelFrontend = false;
++    // Reserved (not implemented: the visibility hook can only widen the
++    // title's culling, and narrowing it safely needs per-actor rules).
 +    bool ReducedActors = false;
 +};
 +
@@ -1812,13 +1812,45 @@ index 0000000..527f1b0
 +    std::filesystem::path mPath;
 +    std::atomic<bool> mHalfRateDraw{true};
 +    std::atomic<bool> mSimpleAudio{true};
-+    std::atomic<bool> mParallelFrontend{true};
++    std::atomic<bool> mParallelFrontend{false};
 +    std::atomic<bool> mReducedActors{false};
 +    std::atomic<bool> mDrawSkipped{false};
 +    bool mPreviousDrawSkipped = false;
 +};
 +
 +} // namespace Oot3dNativeGame
+diff --git a/tools/oot3d/third_party/azahar_audio/audio_core/hle/source.cpp b/tools/oot3d/third_party/azahar_audio/audio_core/hle/source.cpp
+index 35bb2e3..5cdb4bf 100644
+--- a/tools/oot3d/third_party/azahar_audio/audio_core/hle/source.cpp
++++ b/tools/oot3d/third_party/azahar_audio/audio_core/hle/source.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
+ #include <cmath>
+ #include <limits>
+ #include <nlohmann/json.hpp>
+@@ -17,6 +18,8 @@
+ 
+ namespace AudioCore::HLE {
+ 
++std::atomic<bool> gSimpleInterpolation{false};
++
+ namespace {
+ 
+ constexpr std::size_t kMaximumSerializedSourceBuffers = 1U << 16U;
+@@ -608,7 +611,9 @@ void Source::GenerateFrame() {
+             break;
+         }
+ 
+-        switch (state.interpolation_mode) {
++        // R36S "Simple audio": no interpolation, whatever the title asks.
++        switch (gSimpleInterpolation.load(std::memory_order_relaxed) ? InterpolationMode::None
++                                                                      : state.interpolation_mode) {
+         case InterpolationMode::None:
+             AudioInterp::None(state.interp_state, state.current_buffer, state.rate_multiplier,
+                               current_frame, frame_position);
 diff --git a/tools/oot3d/ui_menu/oot3d_menu_presentation.h b/tools/oot3d/ui_menu/oot3d_menu_presentation.h
 index 634a3b1..ec05dea 100644
 --- a/tools/oot3d/ui_menu/oot3d_menu_presentation.h

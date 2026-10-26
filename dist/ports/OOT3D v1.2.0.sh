@@ -2,6 +2,8 @@
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
 # Version 1.0.0 (2026-10-25): PGO + paralelo + memoria en linea + ring de uniforms.
 # Version 1.1.0 (2026-10-26): CPU y GPU en paralelo (TRIAEVUM_INPUT_ADMISSION=0), ~13 fps.
+# Version 1.2.0 (2026-10-26): HUD y menu Fn visibles; dibujo a medio ritmo y audio simple
+#   (activados por defecto, Fn > Game > R36S performance); +17 % de velocidad.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
