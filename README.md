@@ -30,7 +30,7 @@ con el renderer portado a **OpenGL ES 3.2**.
 | v1.0.0 | 129 | 7,7 | Port inicial (GLES, paralelo, PGO) |
 | v1.1.0 | 82–85 | 12,2 | CPU y GPU en paralelo (`TRIAEVUM_INPUT_ADMISSION=0`) |
 | v1.2.0 | 69,8 | 14,3 | Dibujo a medio ritmo + audio simple; HUD y menú arreglados |
-| **v1.2.1** | **62,9** | **15,9** | Sin cuadros negros; contador de FPS; audio estirado (−4,5 % si está activo) |
+| **v1.2.1** | **62,9** | **15,9** | Sin cuadros negros; contador de FPS; audio estirado (−4,5 % si está activo). (MAximos, usualmente va entre 7 y 8 estables, o entre 5 y 7 sin frameskip |
 
 Mediciones en la consola con el agente de pruebas por red, A/B alternado y con audio (demo de la pantalla de título).
 
