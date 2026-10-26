@@ -34,7 +34,7 @@ index b49d215..55c299e 100644
  #endif
  
 diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
-index 6308e40..990cc86 100644
+index 6308e40..07f0378 100644
 --- a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
 +++ b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
 @@ -11,6 +11,8 @@
@@ -89,7 +89,7 @@ index 6308e40..990cc86 100644
  
  uint64_t HashBytes(std::span<const uint8_t> bytes) {
      uint64_t hash = 1469598103934665603ULL;
-@@ -140,7 +169,49 @@ struct PicaGlGeometryBuffer {
+@@ -140,7 +169,98 @@ struct PicaGlGeometryBuffer {
      uint64_t StructuralSignature = 0U;
  };
  
@@ -98,6 +98,54 @@ index 6308e40..990cc86 100644
 +bool PicaGlSkipDraws() {
 +    static const bool skip = std::getenv("OOT3D_GL_SKIP_DRAWS") != nullptr;
 +    return skip;
++}
++
++// GPU cost diagnostics, all off by default:
++//   OOT3D_GL_TINY_SCISSOR=1  every PICA draw rasterizes into 1x1 pixel (vertex work stays)
++//   OOT3D_GL_SKIP_SHADOW=1   shadow-producer draws are skipped
++// Returns false when the draw must not be issued.
++bool PicaGlPrepareDraw(bool shadowProducer) {
++    if (PicaGlSkipDraws()) return false;
++    static const bool skipShadow = std::getenv("OOT3D_GL_SKIP_SHADOW") != nullptr;
++    if (skipShadow && shadowProducer) return false;
++    static const bool tinyScissor = std::getenv("OOT3D_GL_TINY_SCISSOR") != nullptr;
++    if (tinyScissor) {
++        glEnable(GL_SCISSOR_TEST);
++        glScissor(0, 0, 1, 1);
++    }
++    return true;
++}
++
++// Shader-text diagnostics for PICA fragment shaders (also part of the cache key):
++//   OOT3D_GL_FLAT_FRAGMENT=1  constant colour (measures TEV/lighting cost)
++//   OOT3D_GL_NO_FRAGDEPTH=1   drop gl_FragDepth writes (re-enables early-Z)
++std::string PicaGlDiagnosticFragment(std::string_view source) {
++    static const bool flat = std::getenv("OOT3D_GL_FLAT_FRAGMENT") != nullptr;
++    static const bool noDepth = std::getenv("OOT3D_GL_NO_FRAGDEPTH") != nullptr;
++    std::string text(source);
++    if (text.find("PicaFragmentUniforms") == std::string::npos) return text;
++    if (noDepth) {
++        size_t at = 0;
++        while ((at = text.find("gl_FragDepth", at)) != std::string::npos) {
++            const size_t lineStart = text.rfind('\n', at) + 1;
++            const size_t lineEnd = text.find(';', at);
++            if (lineEnd == std::string::npos) break;
++            if (text.find('=', at) < lineEnd) {
++                text.replace(lineStart, lineEnd + 1 - lineStart, "/* frag depth write removed */");
++                at = lineStart;
++            } else {
++                at += 12;
++            }
++        }
++    }
++    if (flat) {
++        const size_t mainAt = text.find("void main()");
++        const size_t brace = mainAt == std::string::npos ? mainAt : text.find('{', mainAt);
++        if (brace != std::string::npos) {
++            text.insert(brace + 1, " pica_color = vec4(0.6, 0.6, 0.6, 1.0); return;");
++        }
++    }
++    return text;
 +}
 +
  GLuint CompilePicaGlShader(GLenum stage, std::string_view source) {
@@ -124,6 +172,7 @@ index 6308e40..990cc86 100644
 +            "precision highp samplerCube;\n"
 +            "precision highp sampler2DArray;\n");
 +        esSource.append(source.substr(kDesktopVersion.size()));
++        if (stage == GL_FRAGMENT_SHADER) esSource = PicaGlDiagnosticFragment(esSource);
 +        source = esSource;
 +    }
 +#endif
@@ -139,7 +188,7 @@ index 6308e40..990cc86 100644
      const GLuint shader = glCreateShader(stage);
      const GLchar* text = source.data();
      const GLint length = static_cast<GLint>(source.size());
-@@ -155,10 +226,35 @@ GLuint CompilePicaGlShader(GLenum stage, std::string_view source) {
+@@ -155,10 +275,35 @@ GLuint CompilePicaGlShader(GLenum stage, std::string_view source) {
      glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
      std::string log(static_cast<size_t>(std::max(logLength, 1)), '\0');
      glGetShaderInfoLog(shader, logLength, nullptr, log.data());
@@ -176,7 +225,7 @@ index 6308e40..990cc86 100644
  }
  
  PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
-@@ -176,6 +272,54 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
+@@ -176,6 +321,60 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
              "PICA fragment shader translation failed: " + translateError);
      }
  
@@ -194,9 +243,15 @@ index 6308e40..990cc86 100644
 +            hash = (hash ^ 0xFFU) * 1099511628211ULL;
 +        }
 +        // Variants compiled with another fragment precision are different binaries.
-+        if (const char* precision = std::getenv("OOT3D_GLES_FRAGMENT_PRECISION")) {
-+            for (const char* c = precision; *c != '\0'; ++c) {
-+                hash = (hash ^ static_cast<uint8_t>(*c)) * 1099511628211ULL;
++        for (const char* variant : {"OOT3D_GLES_FRAGMENT_PRECISION", "OOT3D_GL_FLAT_FRAGMENT",
++                                    "OOT3D_GL_NO_FRAGDEPTH"}) {
++            if (const char* value = std::getenv(variant)) {
++                for (const char* c = variant; *c != '\0'; ++c) {
++                    hash = (hash ^ static_cast<uint8_t>(*c)) * 1099511628211ULL;
++                }
++                for (const char* c = value; *c != '\0'; ++c) {
++                    hash = (hash ^ static_cast<uint8_t>(*c)) * 1099511628211ULL;
++                }
 +            }
 +        }
 +        char name[32];
@@ -231,7 +286,7 @@ index 6308e40..990cc86 100644
      const GLuint vertex = CompilePicaGlShader(GL_VERTEX_SHADER, vertexSource);
      GLuint fragment = 0U;
      GLuint program = 0U;
-@@ -184,6 +328,9 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
+@@ -184,6 +383,9 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
          program = glCreateProgram();
          glAttachShader(program, vertex);
          glAttachShader(program, fragment);
@@ -241,7 +296,7 @@ index 6308e40..990cc86 100644
          glLinkProgram(program);
          GLint linked = GL_FALSE;
          glGetProgramiv(program, GL_LINK_STATUS, &linked);
-@@ -196,20 +343,27 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
+@@ -196,20 +398,27 @@ PicaGlProgram BuildPicaGlProgram(const GfxNativePicaDrawView& draw) {
              throw std::runtime_error(
                  "PICA OpenGL program link failed: " + log);
          }
@@ -281,7 +336,7 @@ index 6308e40..990cc86 100644
      } catch (...) {
          if (program != 0U) {
              glDeleteProgram(program);
-@@ -251,6 +405,7 @@ GLenum ToPicaGlStencil(GfxNativePicaStencilAction action) {
+@@ -251,6 +460,7 @@ GLenum ToPicaGlStencil(GfxNativePicaStencilAction action) {
      throw std::runtime_error("invalid PICA stencil action");
  }
  
@@ -289,7 +344,7 @@ index 6308e40..990cc86 100644
  GLenum ToPicaGlLogic(GfxNativePicaLogicOperation operation) {
      switch (operation) {
          case GfxNativePicaLogicOperation::Clear: return GL_CLEAR;
-@@ -272,6 +427,7 @@ GLenum ToPicaGlLogic(GfxNativePicaLogicOperation operation) {
+@@ -272,6 +482,7 @@ GLenum ToPicaGlLogic(GfxNativePicaLogicOperation operation) {
      }
      throw std::runtime_error("invalid PICA logic operation");
  }
@@ -297,7 +352,7 @@ index 6308e40..990cc86 100644
  
  GLenum ToPicaGlBlendEquation(GfxNativeBlendEquation equation) {
      switch (equation) {
-@@ -490,7 +646,7 @@ void DeletePicaDisplay(PicaGlDisplay& display) {
+@@ -490,7 +701,7 @@ void DeletePicaDisplay(PicaGlDisplay& display) {
  
  struct GfxRenderingAPIOGL::NativePicaState {
      std::vector<uint64_t> Completions;
@@ -306,7 +361,7 @@ index 6308e40..990cc86 100644
      Renderer3ds::PicaCompositionSchedule Composition;
      std::map<PicaGlShaderKey, PicaGlProgram> Programs;
      std::map<PicaGlTargetKey, PicaGlTarget> Targets;
-@@ -508,6 +664,17 @@ struct GfxRenderingAPIOGL::NativePicaState {
+@@ -508,6 +719,17 @@ struct GfxRenderingAPIOGL::NativePicaState {
      GLuint IndexBuffer = 0U;
      GLuint VertexUniformBuffer = 0U;
      GLuint FragmentUniformBuffer = 0U;
@@ -324,7 +379,7 @@ index 6308e40..990cc86 100644
      GLuint FallbackColor = 0U;
      GLuint FallbackInteger = 0U;
      GLuint ScanoutProgram = 0U;
-@@ -536,7 +703,7 @@ GfxRenderingAPIOGL::~GfxRenderingAPIOGL() {
+@@ -536,7 +758,7 @@ GfxRenderingAPIOGL::~GfxRenderingAPIOGL() {
  void GfxRenderingAPIOGL::InitNativePica() {
      ShutdownNativePica();
      mNativePica = std::make_unique<NativePicaState>();
@@ -333,7 +388,7 @@ index 6308e40..990cc86 100644
      auto& state = *mNativePica;
      state.GeometryCacheEnabled = mNativePicaGeometryCacheEnabled;
      glGenVertexArrays(1, &state.VertexArray);
-@@ -545,6 +712,20 @@ void GfxRenderingAPIOGL::InitNativePica() {
+@@ -545,6 +767,20 @@ void GfxRenderingAPIOGL::InitNativePica() {
      glGenBuffers(1, &state.IndexBuffer);
      glGenBuffers(1, &state.VertexUniformBuffer);
      glGenBuffers(1, &state.FragmentUniformBuffer);
@@ -354,7 +409,7 @@ index 6308e40..990cc86 100644
  
      const std::array<uint8_t, 4> white{255U, 255U, 255U, 255U};
      glGenTextures(1, &state.FallbackColor);
-@@ -557,13 +738,12 @@ void GfxRenderingAPIOGL::InitNativePica() {
+@@ -557,13 +793,12 @@ void GfxRenderingAPIOGL::InitNativePica() {
      const uint32_t emptyShadow = 0xFFFFFFFFU;
      glGenTextures(1, &state.FallbackInteger);
      glBindTexture(GL_TEXTURE_2D, state.FallbackInteger);
@@ -370,7 +425,7 @@ index 6308e40..990cc86 100644
  out vec2 pica_uv;
  void main() {
      const vec2 positions[3] = vec2[3](
-@@ -573,7 +753,7 @@ void main() {
+@@ -573,7 +808,7 @@ void main() {
      pica_uv = position * 0.5 + 0.5;
  }
  )glsl";
@@ -379,7 +434,7 @@ index 6308e40..990cc86 100644
  layout(binding=0) uniform sampler2D pica_scanout;
  uniform int pica_flip_y;
  in vec2 pica_uv;
-@@ -623,7 +803,7 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
+@@ -623,7 +858,7 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
      if (!mNativePica) {
          return;
      }
@@ -388,7 +443,7 @@ index 6308e40..990cc86 100644
      auto& state = *mNativePica;
      for (auto& [key, program] : state.Programs) {
          glDeleteProgram(program.Handle);
-@@ -651,6 +831,11 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
+@@ -651,6 +886,11 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
      glDeleteBuffers(1, &state.IndexBuffer);
      glDeleteBuffers(1, &state.VertexUniformBuffer);
      glDeleteBuffers(1, &state.FragmentUniformBuffer);
@@ -400,7 +455,7 @@ index 6308e40..990cc86 100644
      glDeleteVertexArrays(1, &state.VertexArray);
  #endif
      mNativePica.reset();
-@@ -672,7 +857,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
+@@ -672,7 +912,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
  bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
      const Renderer3ds::PicaCompositionSequenceView& sequence,
      std::string* error) {
@@ -409,7 +464,7 @@ index 6308e40..990cc86 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -701,7 +886,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
+@@ -701,7 +941,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
  #endif
  }
  
@@ -418,7 +473,7 @@ index 6308e40..990cc86 100644
  namespace {
  
  void DeletePicaGlGeometry(
-@@ -763,8 +948,8 @@ PicaGlTarget& GetPicaGlTarget(
+@@ -763,8 +1003,8 @@ PicaGlTarget& GetPicaGlTarget(
  
          glGenTextures(1, &target.Shadow);
          glBindTexture(GL_TEXTURE_2D, target.Shadow);
@@ -429,7 +484,7 @@ index 6308e40..990cc86 100644
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-@@ -927,8 +1112,10 @@ PicaGlTexture& GetPicaGlTexture(
+@@ -927,8 +1167,10 @@ PicaGlTexture& GetPicaGlTexture(
              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,
                              std::min<uint32_t>(texture.MaxMipLevel,
                                                 mipLevels - 1U));
@@ -440,7 +495,7 @@ index 6308e40..990cc86 100644
          }
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
                          ToPicaGlWrap(texture.NativeWrapS));
-@@ -1083,7 +1270,7 @@ PicaGlDisplay& GetPicaGlDisplay(
+@@ -1083,7 +1325,7 @@ PicaGlDisplay& GetPicaGlDisplay(
  GfxNativePicaBackendStats
  GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
      GfxNativePicaBackendStats result;
@@ -449,7 +504,7 @@ index 6308e40..990cc86 100644
      if (mNativePica != nullptr) {
          result.Available = true;
          const auto registry = mNativePica->GeometryRegistry.Stats();
-@@ -1114,7 +1301,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
+@@ -1114,7 +1356,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
  void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
      bool enabled) noexcept {
      mNativePicaGeometryCacheEnabled = enabled;
@@ -458,7 +513,7 @@ index 6308e40..990cc86 100644
      if (mNativePica != nullptr) {
          mNativePica->GeometryCacheEnabled = enabled;
      }
-@@ -1123,9 +1310,60 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
+@@ -1123,9 +1365,60 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
  #endif
  }
  
@@ -520,7 +575,7 @@ index 6308e40..990cc86 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1172,18 +1410,21 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1172,18 +1465,21 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
          glBindVertexArray(mNativePica->VertexArray);
          glUseProgram(program.Handle);
  
@@ -554,7 +609,7 @@ index 6308e40..990cc86 100644
          mNativePica->UniformUploads += 2U;
          mNativePica->UniformUploadBytes += draw.VertexUniformBytes.size() +
                                             draw.FragmentUniformBytes.size();
-@@ -1426,7 +1667,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1426,7 +1722,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                             GL_READ_WRITE, GL_R32UI);
          if (shadowProducer) {
              glDisable(GL_BLEND);
@@ -564,7 +619,7 @@ index 6308e40..990cc86 100644
              glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
          } else {
              glColorMask((draw.ColorWriteMask & 1U) != 0U,
-@@ -1435,7 +1678,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1435,7 +1733,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                          (draw.ColorWriteMask & 8U) != 0U);
              if (draw.Blend.Enabled) {
                  glEnable(GL_BLEND);
@@ -575,7 +630,7 @@ index 6308e40..990cc86 100644
                  glBlendEquationSeparate(
                      ToPicaGlBlendEquation(draw.Blend.EquationRgb),
                      ToPicaGlBlendEquation(draw.Blend.EquationAlpha));
-@@ -1450,8 +1695,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1450,8 +1750,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                               draw.Blend.ConstantColor[3]);
              } else {
                  glDisable(GL_BLEND);
@@ -586,34 +641,34 @@ index 6308e40..990cc86 100644
              }
          }
  
-@@ -1530,7 +1777,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1530,7 +1832,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  }
                  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,
                               persistentGeometryBuffer);
 -                glDrawElementsBaseVertex(
-+                if (!PicaGlSkipDraws()) glDrawElementsBaseVertex(
++                if (PicaGlPrepareDraw(shadowProducer)) glDrawElementsBaseVertex(
                      topology,
                      static_cast<GLsizei>(
                          preparedGeometry->VertexOrIndexCount),
-@@ -1559,7 +1806,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1559,7 +1861,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  const GLenum type = draw.IndicesAre16Bit
                                          ? GL_UNSIGNED_SHORT
                                          : GL_UNSIGNED_BYTE;
 -                glDrawElementsBaseVertex(
-+                if (!PicaGlSkipDraws()) glDrawElementsBaseVertex(
++                if (PicaGlPrepareDraw(shadowProducer)) glDrawElementsBaseVertex(
                      topology, static_cast<GLsizei>(indexCount), type, nullptr,
                      draw.BaseVertex);
              }
-@@ -1569,7 +1816,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1569,7 +1871,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  throw std::runtime_error(
                      "PICA non-indexed draw has too many vertices");
              }
 -            glDrawArrays(topology, 0,
-+            if (!PicaGlSkipDraws()) glDrawArrays(topology, 0,
++            if (PicaGlPrepareDraw(shadowProducer)) glDrawArrays(topology, 0,
                           static_cast<GLsizei>(draw.VertexCount));
          }
          // Ordinary raster and framebuffer commands are ordered by GL. Only
-@@ -1592,7 +1839,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1592,7 +1894,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
  bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
      const GfxNativePicaDisplayTransferView& transfer,
      std::string* error) {
@@ -622,7 +677,7 @@ index 6308e40..990cc86 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1686,7 +1933,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+@@ -1686,7 +1988,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
              glDisable(GL_STENCIL_TEST);
              glDisable(GL_CULL_FACE);
              glDisable(GL_SCISSOR_TEST);
@@ -632,7 +687,7 @@ index 6308e40..990cc86 100644
              glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
              if (transfer.PresentationMode ==
                  GfxNativePicaPresentationMode::AlphaOverlay) {
-@@ -1733,7 +1982,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+@@ -1733,7 +2037,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
  bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
      uint64_t renderTargetNamespace, uint32_t colorPhysicalAddress,
      std::string* error) {
@@ -641,7 +696,7 @@ index 6308e40..990cc86 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1765,7 +2014,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
+@@ -1765,7 +2069,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
  
  bool GfxRenderingAPIOGL::SubmitPicaMemoryFill(
      const GfxNativePicaMemoryFillView& fill, std::string* error) {
@@ -650,7 +705,7 @@ index 6308e40..990cc86 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1802,7 +2051,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
+@@ -1802,7 +2106,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
          SetPicaGlError(error, "PICA completion identity is invalid");
          return false;
      }
@@ -659,7 +714,7 @@ index 6308e40..990cc86 100644
      // SubmitPicaDraw has already copied every guest source span into
      // backend-owned GL buffers/textures. A completion acknowledges that copy;
      // it does not need to idle the GPU. GL preserves command ordering through
-@@ -1826,7 +2075,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
+@@ -1826,7 +2130,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
          if (!mNativePica) {
              throw std::runtime_error("PICA OpenGL backend is not initialized");
          }
