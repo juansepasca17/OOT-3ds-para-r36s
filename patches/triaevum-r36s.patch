@@ -980,7 +980,7 @@ index 42f991d..f0d7838 100644
          )
      else:
 diff --git a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
-index 6c029b6..486b27a 100644
+index 6c029b6..28d52b4 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
 @@ -12,6 +12,7 @@
@@ -991,10 +991,18 @@ index 6c029b6..486b27a 100644
  #include <functional>
  #include <utility>
  
-@@ -896,6 +897,10 @@ void InGameMenu::UpdateSavestateOutcome() {
+@@ -894,8 +895,17 @@ void InGameMenu::UpdateSavestateOutcome() {
+ }
+ 
  void InGameMenu::Update(const InGameMenuHostInput &input, bool hostGuiOwnsInput, double elapsedSeconds) {
-   const bool toggle = input.Toggle && !mToggleHeld;
+-  const bool toggle = input.Toggle && !mToggleHeld;
++  bool toggle = input.Toggle && !mToggleHeld;
    mToggleHeld = input.Toggle;
++  // Debugging without a controller: OOT3D_MENU_OPEN_AT_FRAME=N opens the
++  // menu once, on the N-th update (screenshots, emulator runs).
++  static const char *openAtText = std::getenv("OOT3D_MENU_OPEN_AT_FRAME");
++  static long openAtFrame = openAtText != nullptr ? std::atol(openAtText) : -1;
++  if (openAtFrame >= 0 && openAtFrame-- == 0 && !mModel.IsOpen()) toggle = true;
 +  if (toggle && std::getenv("OOT3D_INPUT_DEBUG") != nullptr) {
 +    std::fprintf(stderr, "[menu] toggle pressed open=%d hostGuiOwnsInput=%d\n",
 +                 mModel.IsOpen() ? 1 : 0, hostGuiOwnsInput ? 1 : 0);

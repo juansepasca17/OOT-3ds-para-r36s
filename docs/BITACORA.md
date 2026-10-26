@@ -188,3 +188,13 @@ rápida 84,4 ms ±0,7 → **sin cambio** (dentro del ruido). Causa: la categorí
 ~1,5 % y ahora ~1 % (`Divide` 0,56 → 0,30 %). Se mantiene (exacta, inofensiva). Perfil 007: código del juego
 traducido **~38 %**, frontend PICA 9 % (+5 % en el hilo de render), libmali 16 % (render), libc (memcpy) 5 %.
 Conclusión: el costo está en el código generado → traductor v2 (`docs/TRADUCTOR_V2.md`).
+
+### Pausa y traspaso (2026-10-26 ~11:00)
+- Investigación de recompiladores (XenonRecomp, N64Recomp, Remill, dynarmic, gbarecomp) resumida en
+  `docs/TRADUCTOR_V2.md`. `__restrict` probado y descartado (sin efecto en el código aarch64).
+- Usuario aprobó D1 (frontend PICA en otro núcleo), D2 (audio simple) y D3 (dibujo 1 de cada 2 frames),
+  D2 y D3 activados por defecto, todo desactivable desde el menú Fn (requiere arreglar C1 antes).
+- C1: añadida `OOT3D_MENU_OPEN_AT_FRAME=N` para abrir el menú sin mando (depuración en qemu).
+- ccache: la build PGO no se cacheaba (`-fprofile-partial-training` desconocida para ccache 4.11);
+  `ignore_options` configurado en WSL.
+- Plan completo y orden de trabajo: `docs/TRADUCTOR_V2.md` (documento de traspaso).

@@ -55,10 +55,11 @@ Resultado: `python scripts/summarize_results.py work/devserver/results/NNN-x --b
 6. **No compilar x86 para validar equivalencia:** `memory_state_fingerprint` cambia entre dos corridas
    del mismo binario. Para cambios numéricos usar pruebas bit a bit (ej. `work/vfptest/`, 120 M casos
    contra el software de referencia, en x86 y en aarch64 con qemu).
-7. **Cambios de cabeceras recompilan los 256 shards** (~20 min aarch64). Juntar varios cambios de
+7. **ccache con PGO:** requiere `ccache -o ignore_options=-fprofile-partial-training` (ccache 4.11 no conoce esa opción y no cachea nada sin esto).
+8. **Cambios de cabeceras recompilan los 256 shards** (~20 min aarch64). Juntar varios cambios de
    cabecera en una sola compilación cuando se pueda; los `.cpp` sueltos tardan ~30 s.
-8. **Rutas absolutas** en los scripts de WSL (los scripts hacen `cd` al directorio del juego).
-9. **Si la consola no responde**, anotarlo en `docs/PENDIENTE_CONFIRMAR.md` y seguir con trabajo de PC.
+9. **Rutas absolutas** en los scripts de WSL (los scripts hacen `cd` al directorio del juego).
+10. **Si la consola no responde**, anotarlo en `docs/PENDIENTE_CONFIRMAR.md` y seguir con trabajo de PC.
 
 ## Ahorrar tokens
 
@@ -75,3 +76,6 @@ Resultado: `python scripts/summarize_results.py work/devserver/results/NNN-x --b
 |---|---|---|---|
 | v1.0.0 | 129 ms | 7,7 | CPU y GPU por turnos |
 | v1.1.0 | 85 ms | 11,7 | `TRIAEVUM_INPUT_ADMISSION=0`; ahora el límite es la CPU |
+| main (coma flotante rápida) | 84 ms | 11,8 | Sin cambio medible |
+
+Plan y tareas pendientes: `docs/TRADUCTOR_V2.md`.
