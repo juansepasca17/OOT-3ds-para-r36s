@@ -254,3 +254,7 @@ Conclusión: el costo está en el código generado → traductor v2 (`docs/TRADU
   (`0x1FF50804`, `0x1FF70804`): `Mixers::GetCurrentStatus()` copiaba un `DspStatus` sin inicializar (28 bytes de
   relleno con basura de pila). Fallo heredado de Azahar. Arreglo: `DspStatus status{};` (y `SourceStatus::Status ret{};`).
 - Resultado: 300 frames, dos corridas, **huellas idénticas** con ASLR. Herramienta: `scripts/wsl/det_run.sh`.
+
+### Cierre (2026-10-26)
+Proyecto cerrado en la v1.2.1 por decisión del autor. Plan pendiente y pasos para reconstruir: `RETOMAR.md`.
+El entorno local (WSL, compilaciones, datos del juego) se borró; el repo conserva parche, scripts y documentación.

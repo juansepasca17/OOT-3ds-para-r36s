@@ -1,5 +1,7 @@
 # OoT3D para R36S (dArkOS RE)
 
+> **Proyecto cerrado (2026-10-26) en la v1.2.1.** Para retomarlo desde cero: [RETOMAR.md](RETOMAR.md).
+
 Port experimental de **The Legend of Zelda: Ocarina of Time 3D** a la **R36S**
 (RK3326, 4× Cortex-A35 a 1.5 GHz, Mali-G31, 1 GB de RAM) con **dArkOS RE**, basado en
 [TriAevum](https://github.com/coccofresco/TriAevum) (recompilación nativa AOT de coccofresco),
@@ -10,7 +12,7 @@ con el renderer portado a **OpenGL ES 3.2**.
 | Rama | Qué es |
 |---|---|
 | **`estable`** (tag `v1.2.1`) | Versión jugable recomendada: ~15,9 fps de lógica en la R36S, HUD y menú Fn visibles |
-| `main` | Desarrollo: optimizaciones del traductor en curso ([docs/TRADUCTOR_V2.md](docs/TRADUCTOR_V2.md)). Puede estar a medias |
+| `main` | Igual que `estable` + el benchmark determinista (A5). Plan sin hacer: [RETOMAR.md](RETOMAR.md) |
 
 ## Estado (v1.2.1, 2026-10-26)
 

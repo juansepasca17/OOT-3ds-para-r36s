@@ -1,5 +1,8 @@
 # OOT3D R36S — Plan v2 (traductor v2 + sacrificios aprobados)
 
+> **Proyecto cerrado el 2026-10-26 en la v1.2.1.** Resumen y orden de trabajo para retomar: [`RETOMAR.md`](../RETOMAR.md).
+> C1, C1b, D2, D3 y A5 se completaron; D1 y "menos actores" se descartaron; T1–T7 quedaron sin hacer.
+
 **Documento de traspaso.** Contiene todo lo necesario para retomar el trabajo en otra sesión sin
 re-investigar: estado exacto, decisiones del usuario, tareas ordenadas con pasos, criterios de
 aceptación, comandos y trampas conocidas. Última actualización: **2026-10-26 ~11:00**.
