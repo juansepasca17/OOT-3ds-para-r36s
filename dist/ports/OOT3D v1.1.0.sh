@@ -1,6 +1,7 @@
 #!/bin/bash
 # Ocarina of Time 3D (TriAevum) para R36S / dArkOS RE.
 # Version 1.0.0 (2026-10-25): PGO + paralelo + memoria en linea + ring de uniforms.
+# Version 1.1.0 (2026-10-26): CPU y GPU en paralelo (TRIAEVUM_INPUT_ADMISSION=0), ~13 fps.
 # Copiar este archivo y la carpeta "oot3d" a /roms/ports/.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -73,6 +74,9 @@ first_run=""
 [ -z "$(ls -A "$GAMEDIR/shadercache" 2>/dev/null)" ] && first_run=" Primera vez: compila shaders, puede tardar."
 
 MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_name="paralelo"
+# v1.1.0: el frame siguiente empieza mientras la GPU dibuja el anterior
+# (CPU y GPU en paralelo). En la consola: 7,7 -> 13,2 fps, sin cambio visual.
+export TRIAEVUM_INPUT_ADMISSION=0
 # El log se vuelca a la SD cada 10 s: sobrevive aunque se apague la consola.
 ( while sleep 10; do sync; done ) &
 SYNC_PID=$!

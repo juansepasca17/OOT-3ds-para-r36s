@@ -139,3 +139,31 @@ Más lento (commit/reload de registros en cada llamada entre funciones) y huella
 determinismo base-vs-base). Próximos candidatos de D: flags solo cuando se leen (hoy
 `Oot3dAotSetSubtractFlags(..., 0xF)` calcula NZCV completo aunque solo se use Z), costo fijo de
 `Oot3dAotEnterBlock` por bloque, y despacho directo entre funciones.
+
+### Diagnóstico de GPU en la consola (trabajo 004, 2026-10-26)
+Binario de diagnóstico con variantes por variable de entorno; 300 frames (100 de calentamiento), modo
+paralelo, escena del quick-state. Perfil previo (trabajo 003): ningún hilo de CPU saturado (principal ~58 %,
+render ~22 %) → CPU y GPU se esperaban una a la otra.
+
+| Variante | Frame p50 | fps | Lectura |
+|---|---|---|---|
+| normal (v1.0) | 129.0 ms | 7.7 | referencia |
+| `TRIAEVUM_INPUT_ADMISSION=1` | 129.2 ms | 7.7 | igual que normal |
+| **`TRIAEVUM_INPUT_ADMISSION=0`** | **74.8 ms** | **13.2** | **CPU y GPU en paralelo: +71 %** |
+| fragmento plano | 89.4 ms | 11.2 | el TEV cuesta ~40 ms de GPU |
+| scissor 1×1 | 89.9 ms | 11.1 | el costo es de píxeles, no de vértices |
+| sin `gl_FragDepth` | 132.8 ms | 7.5 | sin efecto (esta escena no lo escribe) |
+| sin sombras | 136.2 ms | 7.3 | sin efecto |
+
+Causa: por defecto cada frame esperaba a que el anterior se presentara (`WaitForFramesInFlight(0)`, pensado
+para bajar la latencia de entrada a 60 Hz). Con `=0` la lógica del frame N+1 corre mientras la GPU dibuja el N;
+el frame queda en ~75 ms ≈ costo de CPU sola (igual que la prueba sin draws). Ahora el límite es la CPU.
+La frecuencia de la GPU (devfreq `simple_ondemand`) oscila 400–520 MHz.
+**v1.1.0** = mismo binario + `export TRIAEVUM_INPUT_ADMISSION=0` en el lanzador.
+
+Confirmación (trabajo 005, binario real del juego, 600 frames): **85.1 ms p50 → 11.7 fps** (v1.0: 129 ms, 7.7 fps).
+Con la espera quitada, fragmento plano (75.8 / 81.2 ms) y scissor 1×1 (82.2 ms) ya no cambian nada:
+**la GPU dejó de ser el límite; ahora manda la CPU** (lógica del juego ~65–75 ms). Optimizar shaders no
+da fps hasta bajar la CPU. Siguiente objetivo: fase D (traductor) y costo del backend PICA en CPU.
+Nota de red: las subidas de resultados del agente pueden colgarse si el anclaje USB parpadea
+(curl sin `--max-time`); se recuperaron con un trabajo de reenvío.

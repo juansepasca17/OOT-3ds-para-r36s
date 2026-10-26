@@ -82,8 +82,8 @@ contexto (con Mesa pasan desapercibidas, pero en Mali corrompen el driver).
 
 ## Instalar en la R36S
 
-Copiar `dist/ports/OOT3D v1.0.0.sh` y la carpeta `dist/ports/oot3d/` a `/roms/ports/` de la SD
-(`EASYROMS\ports\` en Windows). Aparece en **Ports → OOT3D v1.0.0**.
+Copiar `dist/ports/OOT3D v1.1.0.sh` y la carpeta `dist/ports/oot3d/` a `/roms/ports/` de la SD
+(`EASYROMS\ports\` en Windows). Aparece en **Ports → OOT3D v1.1.0**.
 - La primera vez compila shaders (unos minutos); quedan guardados en `oot3d/shadercache/`.
 - **Select + Start** sale. La partida va en `oot3d/savedata/`.
 - `dist/ports/OOT3D-Info.sh` registra los datos de la consola en `ports/oot3d_info.txt`.
