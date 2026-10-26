@@ -12,24 +12,35 @@ con el renderer portado a **OpenGL ES 3.2**.
 | **`estable`** (tag `v1.2.0`) | Versión jugable recomendada: ~14 fps de lógica en la R36S, HUD y menú Fn visibles |
 | `main` | Desarrollo: optimizaciones del traductor en curso ([docs/TRADUCTOR_V2.md](docs/TRADUCTOR_V2.md)). Puede estar a medias |
 
-## Estado (v1.0, 2026-10-25)
+## Estado (v1.2.0, 2026-10-26)
 
-**Se puede jugar completo**, pero lento: **~7.75 fps** en la intro, un poco menos en Kokiri.
+**Se puede jugar completo.** Va por debajo de los 30 fps originales: el juego corre más lento que en tiempo real.
 
 - ✅ Arranca, menú de inicio, selección de archivo, juego con Link, guardar y cargar.
 - ✅ Español (la ROM USA trae inglés, francés y español), una sola pantalla (SingleScreen 3.0).
-- ✅ GPU real (Mali-G31, GLES 3.2), lógica y dibujo en paralelo, caché persistente de shaders.
-- ✅ Optimizado con PGO (perfil tomado en la consola) y acceso a memoria en línea.
-- ⚠️ El sonido se entrecorta (el juego corre por debajo de 30 Hz).
-- ⚠️ El menú de configuración de TriAevum (Fn o R3) se abre pero no se ve.
-- ❌ Sin modo cartoon ni efectos de la versión de PC (son del renderer Vulkan; la R36S no tiene Vulkan).
+- ✅ GPU real (Mali-G31, GLES 3.2), CPU y GPU en paralelo, caché persistente de shaders, PGO.
+- ✅ **HUD visible** (corazones, rupias, botones) y **menú Fn visible y legible** (v1.2.0).
+- ✅ Menú Fn → Game → **R36S performance**: *Half-rate drawing* y *Simple audio* (activados por defecto).
+- ✅ Preset gráfico **Toon** (cel-shading) en Fn → Video → Graphics preset.
+- ⚠️ Con *Half-rate drawing* la imagen se actualiza a la mitad (~7 fps visibles); se puede apagar.
+- ⚠️ Los guardados rápidos (*save states*) del menú no funcionan con OpenGL (solo con Vulkan).
 
-| Medición en la R36S | Valor |
-|---|---|
-| Lógica del juego por frame | 61.5 ms (era 89 ms) |
-| Frame completo (mediana) | 128.9 ms |
-| Espera de GPU por frame | 30–47 ms |
-| Límite si no se dibujara nada | 75 ms (~13 fps) |
+| Versión | ms por frame | fps de lógica | Cambio principal |
+|---|---|---|---|
+| v1.0.0 | 129 | 7,7 | Port inicial (GLES, paralelo, PGO) |
+| v1.1.0 | 82–85 | 12,2 | CPU y GPU en paralelo (`TRIAEVUM_INPUT_ADMISSION=0`) |
+| **v1.2.0** | **69,8** | **14,3** | Dibujo a medio ritmo + audio simple; HUD y menú arreglados |
+
+Mediciones en la consola con el agente de pruebas por red, A/B alternado y con audio (demo de la pantalla de título).
+
+### Novedades de la v1.2.0
+- **HUD y menú Fn invisibles: arreglado.** La GPU emulada (PICA) dejaba enlazado su *vertex array* y la interfaz
+  dibujaba con atributos ajenos que apuntaban a búferes ya borrados; el driver descartaba esos dibujos.
+- **Menú legible a 640×480**: texturas de la interfaz con mipmaps y `OOT3D_MENU_SCALE=1.6` en el lanzador.
+- **Dibujo a medio ritmo** (+15,8 %): el traductor permite que el host salte `Gameplay_Draw` uno de cada dos
+  frames; el frame siguiente no se presenta, así no hay parpadeo negro.
+- **Audio simple** (~1 %): mezcla sin interpolación.
+- Opciones guardadas en `oot3d/config/r36s_perf.json`.
 
 El detalle de cada prueba está en [docs/BITACORA.md](docs/BITACORA.md); el plan, en [PLAN.md](PLAN.md).
 Para portar **otros** juegos a la R36S con ayuda de una IA: [GUIA_PORTEO_R36S.md](GUIA_PORTEO_R36S.md)
@@ -97,12 +108,15 @@ Copiar `dist/ports/OOT3D v1.2.0.sh` y la carpeta `dist/ports/oot3d/` a `/roms/po
 
 ## Qué falta (para quien lo retome)
 
-1. **~65 ms por frame sin identificar en el hilo de dibujo** (aparte de ~40 de GPU y ~22 del backend
-   PICA). Sospechosos: UI Fast3D/N64, copias de display, subidas de textura. Medir por fases.
-2. **Traductor (fase D):** `--local-state` salió 14 % más lento (descartado). Siguientes ideas: calcular
-   solo las flags que se leen y aligerar el costo fijo de `Oot3dAotEnterBlock` por bloque.
+Todo el plan, con pasos, comandos y trampas conocidas, está en [docs/TRADUCTOR_V2.md](docs/TRADUCTOR_V2.md).
+La forma de probar rápido (PC, qemu y consola por red) está en [docs/PRUEBAS.md](docs/PRUEBAS.md).
+
+1. **Traductor v2**: el límite es la CPU y el ~38 % es código del juego traducido. Etapas: registros como
+   variables locales (T1), flags solo cuando se leen (T3), llamadas por vida de registros (T2), memoria
+   directa de 4 GB (T7). `__restrict` ya se probó y no sirve.
+2. Descartados por costo/riesgo: frontend PICA en otro núcleo y "menos actores".
 3. `mediump` en fragmentos hace caer el compilador de Mali (`llvm.bifrost.fptrunc.te`): no usarlo global.
-4. Menú de configuración invisible en GLES; opciones para R36S (resolución, límite de FPS, cartoon liviano).
+4. Menú del port en inglés (el juego sí está en español).
 
 ## Licencia
 
