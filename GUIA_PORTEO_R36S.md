@@ -120,6 +120,25 @@ kill $SYNC_PID 2>/dev/null; sync
 [ -n "$controlfolder" ] && pm_finish
 ```
 
+### Pruebas por red sin SD: servidor de trabajos + agente (probado)
+
+Funciona aunque la consola no tenga WiFi: **anclaje USB del celular** (el celular conectado al WiFi de la
+casa) → la consola sale por `usb0` y llega a la PC. La PC **no** puede entrar a la consola (red del
+celular aparte), así que la conexión la inicia la consola:
+
+- **PC:** `python scripts/devserver.py` (puerto 8765, token en `work/devserver/token.txt`). El trabajo
+  actual es `job.txt` (id) + `job.sh`; los archivos van en `files/` (comprimir con gzip: el binario de
+  148 MB baja a 47 MB); los resultados llegan a `results/<id>/`; `heartbeat.txt` muestra si el agente vive.
+- **Consola:** `OOT3D Dev.sh` en Ports (lee `oot3d/dev/agent.conf` con `SERVER` y `TOKEN`). Consulta cada
+  20 s, ejecuta cada trabajo nuevo una vez, sube `job.log` + `out/*`. Start cierra (solo en espera).
+  Helpers para los trabajos: `fetch NOMBRE DESTINO [sha256]`, `send ARCHIVO`, `oot3d_env`.
+- **Firewall de Windows:** aunque Python figure "permitido", la red como **Pública** descartaba la
+  entrada. Diagnóstico rápido: desde WSL `curl http://<IP-PC>:8765/ping` (timeout = bloqueado,
+  403 = abierto). Solución (el usuario, en cmd de administrador):
+  `netsh advfirewall firewall add rule name="OOT3D devserver" dir=in action=allow protocol=TCP localport=8765 remoteip=localsubnet,10.0.0.0/8 profile=any`
+- Velocidad medida por anclaje USB: **~0.46 MB/s** → enviar solo lo que cambió y comprimido.
+- dArkOS RE trae **Tailscale** (`tailscale0`): instalándolo también en la PC, funcionaría desde cualquier red.
+
 ## 6. Errores a evitar
 
 **Compilación y entorno**
