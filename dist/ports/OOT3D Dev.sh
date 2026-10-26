@@ -41,11 +41,12 @@ export SERVER TOKEN GAMEDIR DEVDIR ESUDO
 
 # Cliente HTTP: curl si existe, si no wget.
 http_get() {  # url archivo
-  if command -v curl >/dev/null; then curl -fsS --connect-timeout 5 -o "$2" "$1"
+  # --max-time: si el anclaje USB parpadea, la conexión no queda colgada para siempre.
+  if command -v curl >/dev/null; then curl -fsS --connect-timeout 5 --max-time 900 -o "$2" "$1"
   else wget -q -T 10 -O "$2" "$1"; fi
 }
 http_post() {  # archivo url
-  if command -v curl >/dev/null; then curl -fsS --connect-timeout 5 --data-binary "@$1" "$2" >/dev/null
+  if command -v curl >/dev/null; then curl -fsS --connect-timeout 5 --max-time 120 --data-binary "@$1" "$2" >/dev/null
   else wget -q -T 30 -O /dev/null --post-file="$1" "$2"; fi
 }
 # Para los trabajos: fetch NOMBRE DESTINO [sha256]  (descomprime si termina en .gz)
@@ -59,14 +60,54 @@ fetch() {
   echo "fetch $name -> $dest ok"
 }
 # Para los trabajos: send ARCHIVO  (sube al servidor dentro de results/<trabajo>/)
-send() { http_post "$1" "$SERVER/upload/$JOB_ID/$(basename "$1")?t=$TOKEN" && echo "send $(basename "$1") ok"; }
+# Reintenta: una subida cortada no pierde resultados.
+send() {
+  local i
+  for i in 1 2 3 4 5; do
+    http_post "$1" "$SERVER/upload/$JOB_ID/$(basename "$1")?t=$TOKEN" && { echo "send $(basename "$1") ok"; return 0; }
+    sleep 5
+  done
+  echo "send $(basename "$1"): fallo"; return 1
+}
 # Para los trabajos: entorno estándar del juego (GPU real, paralelo, caché de shaders).
 oot3d_env() {
   export LD_LIBRARY_PATH="$GAMEDIR/libs:$LD_LIBRARY_PATH"
   export SDL_GAMECONTROLLERCONFIG="${sdl_controllerconfig:-$SDL_GAMECONTROLLERCONFIG}"
-  export TRIAEVUM_PARALLEL_PRESENTATION=1 OOT3D_GL_PROGRAM_CACHE="$GAMEDIR/shadercache"
+  export TRIAEVUM_PARALLEL_PRESENTATION=1 TRIAEVUM_INPUT_ADMISSION=0
+  export OOT3D_GL_PROGRAM_CACHE="$GAMEDIR/shadercache"
 }
-export -f http_get http_post fetch send oot3d_env
+# Argumentos estándar del juego en benchmark (FRAMES/WARMUP ajustables por trabajo).
+oot3d_args() {
+  OOT3D_ARGS=(--a32-process-manifest "$GAMEDIR/game/oot3d_native_process_manifest.json"
+    --resource-root "$GAMEDIR/resources.o2r" --config "$GAMEDIR/config/oot3d_native_game.json"
+    --controls-config "$GAMEDIR/config/oot3d_controls.json" --ui-profile topscreen
+    --topscreen-config "$GAMEDIR/config/topscreen_ui.json"
+    --topscreen-texture-overrides "$GAMEDIR/config/atlas_overrides.o3tu" --save-data "$GAMEDIR/savedata"
+    --quick-state "$GAMEDIR/savedata/quick.oot3dsav" --renderer opengl
+    --gameplay-timing native30_no_interpolation --parallel-presentation --width 640 --height 480
+    --throughput-benchmark --disable-audio --frames "${FRAMES:-600}" --benchmark-warmup-frames "${WARMUP:-100}")
+}
+# Para los trabajos: bench NOMBRE BINARIO [VAR=valor...]
+#   -> out/bench_NOMBRE.json + out/log_NOMBRE.txt (BINARIO "game" = el juego instalado)
+bench() {
+  local name=$1 bin=$2; shift 2
+  [ "$bin" = game ] && bin="$GAMEDIR/oot3d_r36s"
+  oot3d_env; oot3d_args
+  echo "==== bench $name ($*)"
+  ( cd "$GAMEDIR" && env "$@" OOT3D_HANG_DUMP_SECONDS=40 timeout "${BENCH_TIMEOUT:-400}" "$bin" "${OOT3D_ARGS[@]}"       --output "$JOBDIR/out/bench_$name.json" > "$JOBDIR/out/log_$name.txt" 2>&1 )
+  echo "exit $name: $?"
+}
+# Para los trabajos: perfrec NOMBRE BINARIO [VAR=valor...]  -> out/perf_NOMBRE.data (solo espacio de usuario)
+perfrec() {
+  local name=$1 bin=$2 P="$DEVDIR/perf"; shift 2
+  [ "$bin" = game ] && bin="$GAMEDIR/oot3d_r36s"
+  [ -x "$P/perf" ] || { echo "perf no instalado en $P"; return 1; }
+  oot3d_env; oot3d_args
+  echo "==== perf $name ($*)"
+  ( cd "$GAMEDIR" && env "$@" LD_LIBRARY_PATH="$P/lib:$LD_LIBRARY_PATH" timeout "${BENCH_TIMEOUT:-400}"       "$P/perf" record -e cpu-clock:u -F 499 -o "$JOBDIR/out/perf_$name.data" -- "$bin" "${OOT3D_ARGS[@]}"       --output "$JOBDIR/out/bench_perf_$name.json" > "$JOBDIR/out/log_perf_$name.txt" 2>&1 )
+  echo "exit perf $name: $?"
+}
+export -f http_get http_post fetch send oot3d_env oot3d_args bench perfrec
 
 # Start (botón 13) mientras espera: cerrar el agente. Lee eventos crudos de js0.
 STOP="$DEVDIR/stop"; rm -f "$STOP"

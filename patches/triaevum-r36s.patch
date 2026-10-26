@@ -803,6 +803,182 @@ index fed3de8..f509913 100644
          "ExHeader SHA-256 does not match the product contract",
      )
      exheader = exheader_path.read_bytes()
+diff --git a/tools/oot3d/native_a32_runtime/oot3d_native_a32_vfp_fast.h b/tools/oot3d/native_a32_runtime/oot3d_native_a32_vfp_fast.h
+index 57e7402..5dc97e6 100644
+--- a/tools/oot3d/native_a32_runtime/oot3d_native_a32_vfp_fast.h
++++ b/tools/oot3d/native_a32_runtime/oot3d_native_a32_vfp_fast.h
+@@ -23,6 +23,7 @@
+ #include "oot3d_native_a32_vfp_ops.h"
+ 
+ #include <bit>
++#include <cmath>
+ #include <cstdint>
+ 
+ namespace Oot3dNativeGame {
+@@ -224,4 +225,102 @@ inline oot3d::recomp::a32::VfpBinary32Result Oot3dVfpFromSigned(
+     return oot3d::recomp::a32::VfpBinary32FromSigned(value, fpscr);
+ }
+ 
++// VDIV: a double-precision quotient of two binary32 values rounds correctly
++// to binary32 (53 >= 2*24+2), and the quotient is exact exactly when
++// quotient * divisor, exact in double, equals the dividend.
++inline oot3d::recomp::a32::VfpBinary32Result Oot3dVfpDivide(
++    std::uint32_t left, std::uint32_t right, std::uint32_t fpscr) noexcept {
++    if ((fpscr & VfpFastDetail::kRoundingModeMask) == 0U &&
++        VfpFastDetail::OperandEligible(left) &&
++        VfpFastDetail::OperandEligible(right) &&
++        (right & 0x7FFFFFFFU) != 0U) [[likely]] {
++        const double dividend = static_cast<double>(VfpFastDetail::AsFloat(left));
++        const double divisor = static_cast<double>(VfpFastDetail::AsFloat(right));
++        const float quotient = static_cast<float>(dividend / divisor);
++        const std::uint32_t bits = VfpFastDetail::AsBits(quotient);
++        if ((left & 0x7FFFFFFFU) == 0U) {
++            return {bits, 0U};
++        }
++        if (VfpFastDetail::NonzeroResultEligible(bits)) {
++            return {bits, static_cast<double>(quotient) * divisor == dividend
++                              ? 0U : VfpFastDetail::kIxc};
++        }
++    }
++    return oot3d::recomp::a32::VfpBinary32Divide(left, right, fpscr);
++}
++
++// VSQRT: same double-rounding argument; exact when root * root == value.
++inline oot3d::recomp::a32::VfpBinary32Result Oot3dVfpSquareRoot(
++    std::uint32_t value, std::uint32_t fpscr) noexcept {
++    if ((fpscr & VfpFastDetail::kRoundingModeMask) == 0U &&
++        VfpFastDetail::OperandEligible(value) &&
++        ((value & 0x80000000U) == 0U || (value & 0x7FFFFFFFU) == 0U)) [[likely]] {
++        if ((value & 0x7FFFFFFFU) == 0U) {
++            return {value, 0U};
++        }
++        const double radicand = static_cast<double>(VfpFastDetail::AsFloat(value));
++        const float root = static_cast<float>(std::sqrt(radicand));
++        const double wide = static_cast<double>(root);
++        return {VfpFastDetail::AsBits(root),
++                wide * wide == radicand ? 0U : VfpFastDetail::kIxc};
++    }
++    return oot3d::recomp::a32::VfpBinary32SquareRoot(value, fpscr);
++}
++
++// VCMP/VCMPE: NZCV in the high bits, IOC only for NaN operands (which take
++// the software path).
++inline oot3d::recomp::a32::VfpBinary32Result Oot3dVfpCompare(
++    std::uint32_t left, std::uint32_t right, bool signalAllNans) noexcept {
++    constexpr std::uint32_t kNan = 0x7F800000U;
++    if ((left & 0x7FFFFFFFU) > kNan || (right & 0x7FFFFFFFU) > kNan) {
++        return oot3d::recomp::a32::VfpBinary32Compare(left, right, signalAllNans);
++    }
++    constexpr std::uint32_t kEqual = 0x60000000U;
++    constexpr std::uint32_t kLess = 0x80000000U;
++    constexpr std::uint32_t kGreater = 0x20000000U;
++    if (((left | right) & 0x7FFFFFFFU) == 0U || left == right) {
++        return {kEqual, 0U};
++    }
++    const bool leftSign = (left & 0x80000000U) != 0U;
++    if (leftSign != ((right & 0x80000000U) != 0U)) {
++        return {leftSign ? kLess : kGreater, 0U};
++    }
++    const bool less = leftSign ? (left & 0x7FFFFFFFU) > (right & 0x7FFFFFFFU)
++                               : left < right;
++    return {less ? kLess : kGreater, 0U};
++}
++
++// VCVT.S32.F32 (round toward zero): normal or zero inputs below 2^31.
++inline oot3d::recomp::a32::VfpBinary32Result Oot3dVfpToSigned(
++    std::uint32_t value, std::uint32_t fpscr) noexcept {
++    const std::uint32_t exponent = VfpFastDetail::BiasedExponent(value);
++    if ((value & 0x7FFFFFFFU) == 0U) {
++        return {0U, 0U};
++    }
++    if (exponent != 0U && exponent < 127U + 31U) [[likely]] {
++        const float input = VfpFastDetail::AsFloat(value);
++        const std::int32_t integer = static_cast<std::int32_t>(input);
++        return {static_cast<std::uint32_t>(integer),
++                static_cast<float>(integer) == input ? 0U : VfpFastDetail::kIxc};
++    }
++    return oot3d::recomp::a32::VfpBinary32ToSigned(value, fpscr);
++}
++
++// VCVT.U32.F32 (round toward zero): non-negative normal inputs below 2^32.
++inline oot3d::recomp::a32::VfpBinary32Result Oot3dVfpToUnsigned(
++    std::uint32_t value, std::uint32_t fpscr) noexcept {
++    const std::uint32_t exponent = VfpFastDetail::BiasedExponent(value);
++    if (value == 0U || value == 0x80000000U) {
++        return {0U, 0U};
++    }
++    if ((value & 0x80000000U) == 0U && exponent != 0U &&
++        exponent < 127U + 32U) [[likely]] {
++        const float input = VfpFastDetail::AsFloat(value);
++        const std::uint32_t integer = static_cast<std::uint32_t>(input);
++        return {integer,
++                static_cast<float>(integer) == input ? 0U : VfpFastDetail::kIxc};
++    }
++    return oot3d::recomp::a32::VfpBinary32ToUnsigned(value, fpscr);
++}
++
+ } // namespace Oot3dNativeGame
+diff --git a/tools/oot3d/native_a32_runtime/test_whole_aot_cpp.py b/tools/oot3d/native_a32_runtime/test_whole_aot_cpp.py
+index 8d93547..12fa3ab 100644
+--- a/tools/oot3d/native_a32_runtime/test_whole_aot_cpp.py
++++ b/tools/oot3d/native_a32_runtime/test_whole_aot_cpp.py
+@@ -318,8 +318,8 @@ class WholeAotCppTests(unittest.TestCase):
+             self.assertIn("Oot3dVfpAdd(", source)
+             self.assertIn("Oot3dVfpMultiplyAccumulate(", source)
+             self.assertIn("Oot3dVfpFromSigned(", source)
+-            # No exact host-float form: stay on the software implementation.
+-            self.assertIn("a32::VfpBinary32Divide(", source)
++            # Divide has an exact host-float form; FromUnsigned stays in software.
++            self.assertIn("Oot3dVfpDivide(", source)
+             self.assertIn("a32::VfpBinary32FromUnsigned(", source)
+             self.assertNotIn("a32::VfpBinary32Add(", source)
+ 
+diff --git a/tools/oot3d/native_a32_runtime/whole_aot_cpp.py b/tools/oot3d/native_a32_runtime/whole_aot_cpp.py
+index 42f991d..f0d7838 100644
+--- a/tools/oot3d/native_a32_runtime/whole_aot_cpp.py
++++ b/tools/oot3d/native_a32_runtime/whole_aot_cpp.py
+@@ -1399,7 +1399,7 @@ def _emit_vfp(item: Instruction) -> list[str]:
+         0x0E200A40: "Oot3dVfpNegativeMultiply",
+         0x0E300A00: "Oot3dVfpAdd",
+         0x0E300A40: "Oot3dVfpSubtract",
+-        0x0E800A00: "a32::VfpBinary32Divide",
++        0x0E800A00: "Oot3dVfpDivide",
+     }.get(ternary)
+     body.extend([
+         "if ((frame.Guest.fpscr & 0x00379F00U) != 0U) {",
+@@ -1430,13 +1430,13 @@ def _emit_vfp(item: Instruction) -> list[str]:
+         body.extend(
+             [
+                 f"Oot3dAotCommitVfp({_lane(destination)}, frame.Guest.fpscr,",
+-                f"    a32::VfpBinary32SquareRoot({_lane(right)}, frame.Guest.fpscr));",
++                f"    Oot3dVfpSquareRoot({_lane(right)}, frame.Guest.fpscr));",
+             ]
+         )
+     elif unary in {0x0EB40A40, 0x0EB40AC0}:
+         body.extend(
+             [
+-                "const auto comparison = a32::VfpBinary32Compare(",
++                "const auto comparison = Oot3dVfpCompare(",
+                 f"    {_lane(destination)}, {_lane(right)},",
+                 f"    {'true' if unary == 0x0EB40AC0 else 'false'});",
+                 "frame.Guest.fpscr = (frame.Guest.fpscr & ~0xF0000000U) |",
+@@ -1459,14 +1459,14 @@ def _emit_vfp(item: Instruction) -> list[str]:
+         body.extend(
+             [
+                 f"Oot3dAotCommitVfp({_lane(destination)}, frame.Guest.fpscr,",
+-                f"    a32::VfpBinary32ToUnsigned({_lane(right)}, frame.Guest.fpscr));",
++                f"    Oot3dVfpToUnsigned({_lane(right)}, frame.Guest.fpscr));",
+             ]
+         )
+     elif unary == 0x0EBD0AC0:
+         body.extend(
+             [
+                 f"Oot3dAotCommitVfp({_lane(destination)}, frame.Guest.fpscr,",
+-                f"    a32::VfpBinary32ToSigned({_lane(right)}, frame.Guest.fpscr));",
++                f"    Oot3dVfpToSigned({_lane(right)}, frame.Guest.fpscr));",
+             ]
+         )
+     else:
 diff --git a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
 index 6c029b6..486b27a 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp

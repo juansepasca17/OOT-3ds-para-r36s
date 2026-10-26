@@ -167,3 +167,17 @@ Con la espera quitada, fragmento plano (75.8 / 81.2 ms) y scissor 1×1 (82.2 ms)
 da fps hasta bajar la CPU. Siguiente objetivo: fase D (traductor) y costo del backend PICA en CPU.
 Nota de red: las subidas de resultados del agente pueden colgarse si el anclaje USB parpadea
 (curl sin `--max-time`); se recuperaron con un trabajo de reenvío.
+
+### Fase D — coma flotante rápida (2026-10-26)
+Perfil de la consola (trabajo 003, hilo principal): código del juego traducido ~36 % de las muestras, frontend
+PICA/GSP ~9 %, coma flotante emulada por software ~7 % (`Divide` de 128 bits, `RoundFinite`, `Unpack`).
+VDIV, VSQRT, VCMP/VCMPE y VCVT a entero iban siempre por software. Nuevas rutas rápidas exactas en
+`oot3d_native_a32_vfp_fast.h` (`Oot3dVfpDivide`, `Oot3dVfpSquareRoot`, `Oot3dVfpCompare`,
+`Oot3dVfpToSigned`, `Oot3dVfpToUnsigned`), con la implementación por software como respaldo fuera de rango:
+- división y raíz en doble precisión: el doble redondeo 53→24 bits es inocuo (53 ≥ 2·24+2); IXC exacto
+  porque `cociente·divisor` y `raíz²` caben exactos en double;
+- comparación y conversión a entero (redondeo hacia cero) sin NaN ni subnormales.
+Verificación: 120 millones de casos aleatorios + bordes, todos los modos FPSCR, x86 y aarch64 (qemu):
+**0 diferencias** bit a bit (valor y flags). 3.927 comparaciones del juego pasan a la ruta rápida.
+Nota: `memory_state_fingerprint` del benchmark x86 **no es determinista** (mismo binario, dos huellas
+distintas): no sirve como prueba de equivalencia entre versiones.
