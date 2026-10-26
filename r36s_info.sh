@@ -71,6 +71,17 @@ ip -brief addr 2>/dev/null || ifconfig 2>/dev/null
 ls /sys/class/net 2>/dev/null
 iw dev 2>/dev/null | grep -E "Interface|ssid"
 (systemctl is-active ssh 2>/dev/null || systemctl is-active sshd 2>/dev/null) | sed 's/^/ssh: /'
+echo "-- drivers de red del kernel (que adaptador USB funcionaria) --"
+moddir=/lib/modules/$(uname -r)
+for m in 8188eu r8188eu rtl8188fu 8188fu rtl8xxxu 8821cu 88x2bu rtl8192cu mt7601u mt76x0u mt76x2u \
+         r8152 asix ax88179_178a cdc_ether rndis_host usbnet cdc_ncm; do
+  if grep -qw "$m" /proc/modules 2>/dev/null; then echo "$m: cargado"
+  elif find "$moddir" -name "$m.ko*" 2>/dev/null | grep -q .; then echo "$m: disponible"
+  elif grep -qiE "CONFIG_.*$(echo "$m" | tr 'a-z' 'A-Z')=y" "/boot/config-$(uname -r)" 2>/dev/null; then echo "$m: integrado"
+  else echo "$m: no"; fi
+done
+grep -sE "dr_mode|otg" /proc/device-tree/*usb*/dr_mode /sys/kernel/debug/usb/*/mode 2>/dev/null
+lsusb 2>/dev/null
 have python3 && python3 --version
 
 section "almacenamiento"
