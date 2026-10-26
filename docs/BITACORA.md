@@ -198,3 +198,19 @@ Conclusión: el costo está en el código generado → traductor v2 (`docs/TRADU
 - ccache: la build PGO no se cacheaba (`-fprofile-partial-training` desconocida para ccache 4.11);
   `ignore_options` configurado en WSL.
 - Plan completo y orden de trabajo: `docs/TRADUCTOR_V2.md` (documento de traspaso).
+
+### C1 — Menú Fn y HUD invisibles: causa y arreglo (2026-10-26)
+- Síntoma: el menú se abre pero no se ve el texto; en partida no se ven corazones, rupias ni botones.
+- Diagnóstico en el PC (x86 escritorio y qemu GLES, con `OOT3D_MENU_OPEN_AT_FRAME=N` + `--screenshot-sequence`):
+  los dibujos con textura de la interfaz integrada (Fast3D) no cambiaban ni un píxel después del primer frame.
+  Estado GL correcto (textura, filtro, blend), pero el **VAO** enlazado era el de la PICA: la PICA y el scanout
+  hacen `glBindVertexArray(PICA)` y lo dejan enlazado; la interfaz configuraba sus atributos encima, con
+  atributos PICA (hasta 16) aún activos apuntando a búferes de geometría que luego se reemplazan → el driver
+  descartaba los dibujos.
+- Arreglo: `InvalidateLegacyStateAfterPica()` vuelve a enlazar el VAO de Fast3D (`mOpenglVao` en GLES, 0 en
+  escritorio). Además: `VertexArraySetAttribs` desactiva atributos sobrantes; texturas de UI con mipmaps
+  (CPU, filtrado trilineal); `OOT3D_MENU_SCALE` (lanzador R36S: 1.6) porque el menú está diseñado para 1080p.
+- Verificado en la Mali (trabajo 011): menú completo y legible. HUD: pendiente de prueba en partida real
+  (lanzador `OOT3D v1.2.0-beta`).
+- Nota: los benchmarks de consola miden la **demo de la pantalla de título** (no hay guardado rápido en la SD).
+- El menú incluye un preset **Toon** (cel-shading): el "modo cartoon" pedido al inicio.

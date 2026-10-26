@@ -77,6 +77,8 @@ MODE=(--parallel-presentation); export TRIAEVUM_PARALLEL_PRESENTATION=1; mode_na
 # v1.1.0: el frame siguiente empieza mientras la GPU dibuja el anterior
 # (CPU y GPU en paralelo). En la consola: 7,7 -> 13,2 fps, sin cambio visual.
 export TRIAEVUM_INPUT_ADMISSION=0
+# Menú Fn legible a 640x480 (el diseño original es para 1080p).
+export OOT3D_MENU_SCALE=1.6
 # El log se vuelca a la SD cada 10 s: sobrevive aunque se apague la consola.
 ( while sleep 10; do sync; done ) &
 SYNC_PID=$!

@@ -33,8 +33,52 @@ index b49d215..55c299e 100644
              break;
  #endif
  
+diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl.cpp
+index 1c660cb..21a361e 100644
+--- a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl.cpp
++++ b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl.cpp
+@@ -141,15 +141,26 @@ GfxClipParameters GfxRenderingAPIOGL::GetClipParameters() {
+ static void VertexArraySetAttribs(ShaderProgram* prg) {
+     size_t numFloats = prg->numFloats;
+     size_t pos = 0;
++    // Attributes a previous, wider shader enabled stay enabled on the VAO and
++    // keep pointing at its buffer. Once that buffer is deleted (the cached
++    // vertex buffers are evicted) every later draw reads an invalid array and
++    // the driver drops it: the menu text and the HUD vanished this way.
++    static uint32_t enabledMask = 0U;
++    uint32_t usedMask = 0U;
+ 
+     for (int i = 0; i < prg->numAttribs; i++) {
+         if (prg->attribLocations[i] >= 0) {
+             glEnableVertexAttribArray(prg->attribLocations[i]);
+             glVertexAttribPointer(prg->attribLocations[i], prg->attribSizes[i], GL_FLOAT, GL_FALSE,
+                                   numFloats * sizeof(float), (void*)(pos * sizeof(float)));
++            if (prg->attribLocations[i] < 32) usedMask |= 1U << prg->attribLocations[i];
+         }
+         pos += prg->attribSizes[i];
+     }
++    for (uint32_t stale = enabledMask & ~usedMask; stale != 0U; stale &= stale - 1U) {
++        glDisableVertexAttribArray(static_cast<GLuint>(__builtin_ctz(stale)));
++    }
++    enabledMask = usedMask;
+ }
+ 
+ void GfxRenderingAPIOGL::SetUniforms(ShaderProgram* prg) const {
+@@ -526,6 +537,12 @@ ShaderProgram* GfxRenderingAPIOGL::CreateAndLoadNewShader(uint64_t shader_id0, u
+     gfx_cc_get_features(shader_id0, shader_id1, &cc_features);
+     const auto fs_buf = BuildFsShader(cc_features);
+     const auto vs_buf = BuildVsShader(cc_features);
++    if (std::getenv("OOT3D_DUMP_F3D_SHADERS") != nullptr) {
++        std::fprintf(stderr, "[f3d] shader %016llx %016llx textures=%d,%d inputs=%d\n----VS\n%s\n----FS\n%s\n----END\n",
++                     static_cast<unsigned long long>(shader_id0), static_cast<unsigned long long>(shader_id1),
++                     cc_features.usedTextures[0] ? 1 : 0, cc_features.usedTextures[1] ? 1 : 0,
++                     cc_features.numInputs, vs_buf.c_str(), fs_buf.c_str());
++    }
+     const GLchar* sources[2] = { vs_buf.data(), fs_buf.data() };
+     const GLint lengths[2] = { (GLint)vs_buf.size(), (GLint)fs_buf.size() };
+     GLint success;
 diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
-index 6308e40..07f0378 100644
+index 6308e40..a06c8fd 100644
 --- a/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
 +++ b/runtime/three_ds_recomp/src/fast/backends/gfx_opengl_pica.cpp
 @@ -11,6 +11,8 @@
@@ -443,7 +487,7 @@ index 6308e40..07f0378 100644
      auto& state = *mNativePica;
      for (auto& [key, program] : state.Programs) {
          glDeleteProgram(program.Handle);
-@@ -651,6 +886,11 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
+@@ -651,12 +886,27 @@ void GfxRenderingAPIOGL::ShutdownNativePica() noexcept {
      glDeleteBuffers(1, &state.IndexBuffer);
      glDeleteBuffers(1, &state.VertexUniformBuffer);
      glDeleteBuffers(1, &state.FragmentUniformBuffer);
@@ -455,7 +499,23 @@ index 6308e40..07f0378 100644
      glDeleteVertexArrays(1, &state.VertexArray);
  #endif
      mNativePica.reset();
-@@ -672,7 +912,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
+ }
+ 
+ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
++    // PICA draws and the scanout bind the PICA vertex array and leave it
++    // bound. Fast3D/UI draws must not configure their attributes on it: the
++    // PICA attributes (up to 16, pointing at geometry buffers that are later
++    // replaced) stay enabled there and the UI draws were dropped (invisible
++    // menu text and HUD), while PICA's own attribute cache went stale.
++#if defined(__APPLE__) || defined(__SWITCH__) || defined(USE_OPENGLES)
++    glBindVertexArray(mOpenglVao);
++#else
++    glBindVertexArray(0);
++#endif
+     mLastLoadedShader = nullptr;
+     mCurrentArrayBuffer = 0U;
+     mLastActiveTexture = -1;
+@@ -672,7 +922,7 @@ void GfxRenderingAPIOGL::InvalidateLegacyStateAfterPica() noexcept {
  bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
      const Renderer3ds::PicaCompositionSequenceView& sequence,
      std::string* error) {
@@ -464,7 +524,7 @@ index 6308e40..07f0378 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -701,7 +941,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
+@@ -701,7 +951,7 @@ bool GfxRenderingAPIOGL::PublishPicaCompositionSequence(
  #endif
  }
  
@@ -473,7 +533,7 @@ index 6308e40..07f0378 100644
  namespace {
  
  void DeletePicaGlGeometry(
-@@ -763,8 +1003,8 @@ PicaGlTarget& GetPicaGlTarget(
+@@ -763,8 +1013,8 @@ PicaGlTarget& GetPicaGlTarget(
  
          glGenTextures(1, &target.Shadow);
          glBindTexture(GL_TEXTURE_2D, target.Shadow);
@@ -484,7 +544,7 @@ index 6308e40..07f0378 100644
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-@@ -927,8 +1167,10 @@ PicaGlTexture& GetPicaGlTexture(
+@@ -927,8 +1177,10 @@ PicaGlTexture& GetPicaGlTexture(
              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL,
                              std::min<uint32_t>(texture.MaxMipLevel,
                                                 mipLevels - 1U));
@@ -495,7 +555,7 @@ index 6308e40..07f0378 100644
          }
          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
                          ToPicaGlWrap(texture.NativeWrapS));
-@@ -1083,7 +1325,7 @@ PicaGlDisplay& GetPicaGlDisplay(
+@@ -1083,7 +1335,7 @@ PicaGlDisplay& GetPicaGlDisplay(
  GfxNativePicaBackendStats
  GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
      GfxNativePicaBackendStats result;
@@ -504,7 +564,7 @@ index 6308e40..07f0378 100644
      if (mNativePica != nullptr) {
          result.Available = true;
          const auto registry = mNativePica->GeometryRegistry.Stats();
-@@ -1114,7 +1356,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
+@@ -1114,7 +1366,7 @@ GfxRenderingAPIOGL::GetNativePicaBackendStats() const noexcept {
  void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
      bool enabled) noexcept {
      mNativePicaGeometryCacheEnabled = enabled;
@@ -513,7 +573,7 @@ index 6308e40..07f0378 100644
      if (mNativePica != nullptr) {
          mNativePica->GeometryCacheEnabled = enabled;
      }
-@@ -1123,9 +1365,60 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
+@@ -1123,9 +1375,60 @@ void GfxRenderingAPIOGL::SetNativePicaGeometryCacheEnabled(
  #endif
  }
  
@@ -575,7 +635,7 @@ index 6308e40..07f0378 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1172,18 +1465,21 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1172,18 +1475,21 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
          glBindVertexArray(mNativePica->VertexArray);
          glUseProgram(program.Handle);
  
@@ -609,7 +669,7 @@ index 6308e40..07f0378 100644
          mNativePica->UniformUploads += 2U;
          mNativePica->UniformUploadBytes += draw.VertexUniformBytes.size() +
                                             draw.FragmentUniformBytes.size();
-@@ -1426,7 +1722,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1426,7 +1732,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                             GL_READ_WRITE, GL_R32UI);
          if (shadowProducer) {
              glDisable(GL_BLEND);
@@ -619,7 +679,7 @@ index 6308e40..07f0378 100644
              glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
          } else {
              glColorMask((draw.ColorWriteMask & 1U) != 0U,
-@@ -1435,7 +1733,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1435,7 +1743,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                          (draw.ColorWriteMask & 8U) != 0U);
              if (draw.Blend.Enabled) {
                  glEnable(GL_BLEND);
@@ -630,7 +690,7 @@ index 6308e40..07f0378 100644
                  glBlendEquationSeparate(
                      ToPicaGlBlendEquation(draw.Blend.EquationRgb),
                      ToPicaGlBlendEquation(draw.Blend.EquationAlpha));
-@@ -1450,8 +1750,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1450,8 +1760,10 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                               draw.Blend.ConstantColor[3]);
              } else {
                  glDisable(GL_BLEND);
@@ -641,7 +701,7 @@ index 6308e40..07f0378 100644
              }
          }
  
-@@ -1530,7 +1832,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1530,7 +1842,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  }
                  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,
                               persistentGeometryBuffer);
@@ -650,7 +710,7 @@ index 6308e40..07f0378 100644
                      topology,
                      static_cast<GLsizei>(
                          preparedGeometry->VertexOrIndexCount),
-@@ -1559,7 +1861,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1559,7 +1871,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  const GLenum type = draw.IndicesAre16Bit
                                          ? GL_UNSIGNED_SHORT
                                          : GL_UNSIGNED_BYTE;
@@ -659,7 +719,7 @@ index 6308e40..07f0378 100644
                      topology, static_cast<GLsizei>(indexCount), type, nullptr,
                      draw.BaseVertex);
              }
-@@ -1569,7 +1871,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1569,7 +1881,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
                  throw std::runtime_error(
                      "PICA non-indexed draw has too many vertices");
              }
@@ -668,7 +728,7 @@ index 6308e40..07f0378 100644
                           static_cast<GLsizei>(draw.VertexCount));
          }
          // Ordinary raster and framebuffer commands are ordered by GL. Only
-@@ -1592,7 +1894,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
+@@ -1592,7 +1904,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDraw(
  bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
      const GfxNativePicaDisplayTransferView& transfer,
      std::string* error) {
@@ -677,7 +737,7 @@ index 6308e40..07f0378 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1686,7 +1988,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+@@ -1686,7 +1998,9 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
              glDisable(GL_STENCIL_TEST);
              glDisable(GL_CULL_FACE);
              glDisable(GL_SCISSOR_TEST);
@@ -687,7 +747,7 @@ index 6308e40..07f0378 100644
              glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
              if (transfer.PresentationMode ==
                  GfxNativePicaPresentationMode::AlphaOverlay) {
-@@ -1733,7 +2037,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
+@@ -1733,7 +2047,7 @@ bool GfxRenderingAPIOGL::SubmitPicaDisplayTransfer(
  bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
      uint64_t renderTargetNamespace, uint32_t colorPhysicalAddress,
      std::string* error) {
@@ -696,7 +756,7 @@ index 6308e40..07f0378 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1765,7 +2069,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
+@@ -1765,7 +2079,7 @@ bool GfxRenderingAPIOGL::ClearPicaRenderTarget(
  
  bool GfxRenderingAPIOGL::SubmitPicaMemoryFill(
      const GfxNativePicaMemoryFillView& fill, std::string* error) {
@@ -705,7 +765,7 @@ index 6308e40..07f0378 100644
      SetPicaGlError(error, "native PICA requires OpenGL 4.3");
      return false;
  #else
-@@ -1802,7 +2106,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
+@@ -1802,7 +2116,7 @@ bool GfxRenderingAPIOGL::QueuePicaCompletion(
          SetPicaGlError(error, "PICA completion identity is invalid");
          return false;
      }
@@ -714,7 +774,7 @@ index 6308e40..07f0378 100644
      // SubmitPicaDraw has already copied every guest source span into
      // backend-owned GL buffers/textures. A completion acknowledges that copy;
      // it does not need to idle the GPU. GL preserves command ordering through
-@@ -1826,7 +2130,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
+@@ -1826,7 +2140,7 @@ bool GfxRenderingAPIOGL::ResetPicaState(std::string* error) {
          if (!mNativePica) {
              throw std::runtime_error("PICA OpenGL backend is not initialized");
          }
@@ -1448,3 +1508,166 @@ index 080be30..2e9cae5 100644
  };
  
  } // namespace Oot3dNativeGame
+diff --git a/tools/oot3d/ui_menu/oot3d_menu_presentation.h b/tools/oot3d/ui_menu/oot3d_menu_presentation.h
+index 634a3b1..ec05dea 100644
+--- a/tools/oot3d/ui_menu/oot3d_menu_presentation.h
++++ b/tools/oot3d/ui_menu/oot3d_menu_presentation.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <cstdlib>
++
+ // Draws the in-game menu model as native UI primitives on the integrated UI
+ // canvas: a centred translucent window with a tab bar, the rows of the
+ // current tab on the left, the focused row's help and choices on the right,
+@@ -16,7 +18,18 @@
+ namespace Oot3dNativeGame::Menu {
+ 
+ // 1 dp is one pixel of a 1080-line window; the canvas is 240 units high.
+-inline constexpr float kDp = 240.0F / 1080.0F;
++// OOT3D_MENU_SCALE enlarges the whole menu for small screens (the R36S
++// launcher uses 1.6: 640x480 text is otherwise about 3 pixels high). The
++// window still clamps to the canvas, and long lists scroll.
++inline float MenuDpFromEnvironment() noexcept {
++    float scale = 1.0F;
++    if (const char* text = std::getenv("OOT3D_MENU_SCALE")) {
++        const float parsed = std::strtof(text, nullptr);
++        if (parsed >= 0.5F && parsed <= 4.0F) scale = parsed;
++    }
++    return 240.0F / 1080.0F * scale;
++}
++inline const float kDp = MenuDpFromEnvironment();
+ 
+ struct Palette {
+     oot3d::ui::UiColor Text{224.0F / 255.0F, 219.0F / 255.0F, 200.0F / 255.0F, 1.0F};
+diff --git a/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.cpp b/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.cpp
+index e8c7f5b..596e2fe 100644
+--- a/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.cpp
++++ b/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.cpp
+@@ -4,16 +4,56 @@
+ #include "fast/oot3d/title_render_backend.h"
+ #include "fast/renderer/compatibility_combiner.h"
+ 
++#include <algorithm>
+ #include <array>
++#include <span>
+ #include <vector>
+ 
+ namespace oot3d::ui {
+ namespace {
+ 
++// Box-filtered mip chain of an RGBA8 image, level 1 onwards. UI textures
++// (menu fonts, HUD icons) are drawn far smaller than their texels on small
++// screens such as the R36S's 640x480: without mips, linear sampling skips
++// most strokes and the text vanishes.
++std::vector<std::vector<std::uint8_t>> BuildUiMipChain(
++    std::span<const std::uint8_t> rgba8, std::uint32_t width, std::uint32_t height) {
++    std::vector<std::vector<std::uint8_t>> levels;
++    std::span<const std::uint8_t> source = rgba8;
++    while (width > 1U || height > 1U) {
++        const std::uint32_t nextWidth = std::max(1U, width / 2U);
++        const std::uint32_t nextHeight = std::max(1U, height / 2U);
++        std::vector<std::uint8_t> next(static_cast<std::size_t>(nextWidth) * nextHeight * 4U);
++        for (std::uint32_t y = 0; y < nextHeight; ++y) {
++            for (std::uint32_t x = 0; x < nextWidth; ++x) {
++                for (std::uint32_t channel = 0; channel < 4U; ++channel) {
++                    std::uint32_t sum = 0U;
++                    for (std::uint32_t dy = 0; dy < 2U; ++dy) {
++                        for (std::uint32_t dx = 0; dx < 2U; ++dx) {
++                            const std::uint32_t sx = std::min(width - 1U, x * 2U + dx);
++                            const std::uint32_t sy = std::min(height - 1U, y * 2U + dy);
++                            sum += source[(static_cast<std::size_t>(sy) * width + sx) * 4U + channel];
++                        }
++                    }
++                    next[(static_cast<std::size_t>(y) * nextWidth + x) * 4U + channel] =
++                        static_cast<std::uint8_t>((sum + 2U) / 4U);
++                }
++            }
++        }
++        levels.push_back(std::move(next));
++        source = levels.back();
++        width = nextWidth;
++        height = nextHeight;
++    }
++    return levels;
++}
++
+ bool ConfigureUiSampler(Fast::GfxRenderingAPI& renderingApi,
+-                        std::string* error) {
++                        std::string* error, std::uint32_t maxMipLevel = 0U) {
+     Fast::GfxNativeSamplerState sampler;
+-    sampler.MinFilter = Fast::GfxNativeTextureFilter::Linear;
++    sampler.MinFilter = maxMipLevel != 0U ? Fast::GfxNativeTextureFilter::LinearMipmapLinear
++                                          : Fast::GfxNativeTextureFilter::Linear;
++    sampler.MaxMipLevel = maxMipLevel;
+     sampler.MagFilter = Fast::GfxNativeTextureFilter::Linear;
+     sampler.WrapS = Fast::GfxNativeTextureWrap::ClampToEdge;
+     sampler.WrapT = Fast::GfxNativeTextureWrap::ClampToEdge;
+@@ -71,17 +111,31 @@ std::uint32_t Fast3dUiRenderBackend::CreateUiTexture(
+     }
+     const std::uint32_t textureId = rendering_api_.NewTexture();
+     rendering_api_.SelectTexture(0, textureId);
+-    if (!ConfigureUiSampler(rendering_api_, error)) {
++    rendering_api_.UploadTexture(rgba8.data(), width, height);
++    std::uint32_t maxLevel = 0U;
++    std::uint32_t levelWidth = width;
++    std::uint32_t levelHeight = height;
++    for (const auto& level : BuildUiMipChain(rgba8, width, height)) {
++        levelWidth = std::max(1U, levelWidth / 2U);
++        levelHeight = std::max(1U, levelHeight / 2U);
++        if (!rendering_api_.UploadTextureMipLevel(maxLevel + 1U, level.data(), levelWidth, levelHeight)) {
++            break;
++        }
++        ++maxLevel;
++    }
++    mip_levels_[textureId] = maxLevel;
++    if (!ConfigureUiSampler(rendering_api_, error, maxLevel)) {
+         rendering_api_.DeleteTexture(textureId);
++        mip_levels_.erase(textureId);
+         return 0U;
+     }
+-    rendering_api_.UploadTexture(rgba8.data(), width, height);
+     return textureId;
+ }
+ 
+ void Fast3dUiRenderBackend::DeleteUiTexture(
+     std::uint32_t textureId) noexcept {
+     if (textureId != 0U) {
++        mip_levels_.erase(textureId);
+         rendering_api_.DeleteTexture(textureId);
+     }
+ }
+@@ -138,7 +192,9 @@ bool Fast3dUiRenderBackend::Draw(
+     const bool textured = textureId != 0U;
+     if (textured) {
+         rendering_api_.SelectTexture(0, textureId);
+-        if (!ConfigureUiSampler(rendering_api_, error)) {
++        const auto levels = mip_levels_.find(textureId);
++        if (!ConfigureUiSampler(rendering_api_, error,
++                                levels != mip_levels_.end() ? levels->second : 0U)) {
+             return false;
+         }
+     }
+diff --git a/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.h b/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.h
+index 91c707f..cb8b46a 100644
+--- a/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.h
++++ b/tools/oot3d/ui_n64/oot3d_legacy_ui_adapters.h
+@@ -3,6 +3,9 @@
+ #include "oot3d/renderer/ui_render_backend.h"
+ #include "oot3d_n64_ui_renderer.h"
+ 
++#include <cstdint>
++#include <unordered_map>
++
+ namespace Fast {
+ class GfxRenderingAPI;
+ class ShaderProgram;
+@@ -43,6 +46,8 @@ class Fast3dUiRenderBackend final
+     Fast::ShaderProgram* solid_shader_ = nullptr;
+     Fast::ShaderProgram* textured_shader_ = nullptr;
+     Fast::ShaderProgram* saturated_shader_ = nullptr;
++    // Highest uploaded mip level of each UI texture (0: no mips).
++    std::unordered_map<std::uint32_t, std::uint32_t> mip_levels_;
+ };
+ 
+ } // namespace oot3d::ui
