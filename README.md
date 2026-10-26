@@ -5,6 +5,13 @@ Port experimental de **The Legend of Zelda: Ocarina of Time 3D** a la **R36S**
 [TriAevum](https://github.com/coccofresco/TriAevum) (recompilación nativa AOT de coccofresco),
 con el renderer portado a **OpenGL ES 3.2**.
 
+## Ramas
+
+| Rama | Qué es |
+|---|---|
+| **`estable`** (tag `v1.1.0`) | Versión jugable recomendada: ~11,7 fps en la R36S |
+| `main` | Desarrollo: optimizaciones del traductor en curso ([docs/TRADUCTOR_V2.md](docs/TRADUCTOR_V2.md)). Puede estar a medias |
+
 ## Estado (v1.0, 2026-10-25)
 
 **Se puede jugar completo**, pero lento: **~7.75 fps** en la intro, un poco menos en Kokiri.
