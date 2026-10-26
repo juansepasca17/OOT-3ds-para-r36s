@@ -171,14 +171,68 @@ celular aparte), así que la conexión la inicia la consola:
 - Opciones experimentales de compiladores/recompiladores: medir en el PC (x86) y verificar resultados
   idénticos antes de llevarlas a la consola.
 
+**Rendimiento: lo que más rindió (caso OoT3D, de 7,7 a ~16 fps de lógica en benchmark)**
+- **Que la CPU y la GPU trabajen a la vez.** Si cada frame espera a que el anterior se presente, sus tiempos
+  se **suman**. Con dos hilos (lógica + render) y sin esa espera: **+71 %**. Pista: ningún hilo al 100 % y
+  `glFinish` esperando decenas de ms.
+- **Medir antes de optimizar shaders.** Variantes de diagnóstico (fragmento plano, scissor 1×1, sin sombras)
+  dicen si el costo es de píxeles, de vértices o de CPU. Cuando la CPU es el límite, la GPU no importa.
+- **Frameskip "de juego":** saltarse la función que *prepara* el dibujo uno de cada dos frames ahorra CPU
+  (+16 %). Trampas:
+  - la consola original presenta la imagen **un frame después** de dibujarla, y ese desfase **cambia**
+    entre escenas (menús frente a partida): no adivinar qué frame ocultar;
+  - detectar el frame vacío por **su contenido** (número de dibujos: 1–4 frente a decenas) y mantener la
+    última imagen, como hace la pantalla real; nunca ocultar dos seguidos, para no congelar escenas pobres.
+- **Medir con una escena de partida, no con la demo del menú.** La demo daba ~16 fps y la partida real 7–9.
+- Clasificar un perfil por **espacio de nombres** engaña: verificar qué funciones caen en cada categoría
+  antes de estimar una ganancia (una "coma flotante 7 %" resultó ser ~1,5 %).
+- `__restrict` en el estado de un recompilador estático no sirve si cada acceso a memoria tiene una ruta lenta
+  con llamada: el compilador asume que la llamada puede tocar el estado.
+- En un generador de código, cambiar **una sola función** (p. ej. una "compuerta" a la entrada) recompila un
+  archivo, no todos: diseñar los cambios para no tocar cabeceras incluidas por todo el código generado.
+
+**Estado GL compartido entre subsistemas**
+- Si dos partes del renderer usan GL (escena emulada + interfaz), cada una debe **restaurar su VAO** y sus
+  atributos. Un VAO ajeno con atributos activos que apuntan a búferes borrados hace que el driver **descarte
+  dibujos en silencio**: el HUD y el menú "funcionaban pero no se veían".
+- Interfaz diseñada para 1080p en una pantalla de 640×480: generar **mipmaps** de las texturas de UI (si no,
+  las letras reducidas 10× desaparecen) y una **escala** de interfaz configurable.
+- Depurar UI sin mando: una variable de entorno que abra el menú en el frame N + `--screenshot-sequence`.
+  Si en el emulador se ve pero en la consola no, mirar estado GL y driver; si tampoco se ve, es código.
+
+**Audio**
+- Si el juego va más lento que el tiempo real, el audio se corta. Técnica de emuladores: **estiramiento de
+  tiempo (WSOLA)**, que alarga el sonido sin cambiar el tono. Hacer barata la búsqueda de empalme (rango
+  corto, muestreo espaciado): la primera versión costó 9 % y la ajustada 4,5 %.
+- Desactivar la interpolación del mezclador es casi gratis y apenas se nota.
+
+**Determinismo (para comparar versiones en el PC)**
+- Correr dos veces el mismo binario y comparar la huella de memoria. Si difieren, repetir con `setarch -R`
+  (sin ASLR): si entonces coinciden, se cuelan **direcciones del host** en la memoria del juego.
+- Localizar con hashes por página de 4 KiB y comparar bytes. Caso real: un struct del DSP de audio sin
+  inicializar copiaba su relleno (basura de pila) a la memoria compartida.
+
+**Pruebas en la consola**
+- Un trabajo = muchas variantes **alternadas** (A, B, A, B) y una tabla automática al final; diferencias < 3 %
+  son ruido salvo que se repitan.
+- Al sincronizar fuentes con otro entorno, incluir los archivos **revertidos** (ya no salen en `git diff`).
+- Publicar el id del trabajo **después** de escribir el script; revisar que el script es el nuevo.
+- Las subidas por anclaje USB pueden colgarse: tiempo límite y reintentos.
+
 **Comunicación**
 - Decir los fps esperados desde el principio; distinguir "probado en consola" de "probado en emulador".
+- Toda opción que cambie la experiencia (frameskip, audio) va al menú del juego, activable y desactivable.
 
 ## 7. Herramientas útiles
 
 `qemu-aarch64` + binfmt · Mesa llvmpipe · shim `LD_PRELOAD` para GL · vigilante con backtraces
 (`tgkill` + `backtrace_symbols_fd`) · `addr2line -f -C` · `nm -D`/`objdump` del driver · `perf` en x86 ·
-ccache · mold.
+ccache · mold · **perf para arm64 en la consola** (paquete Debian + librerías, `-e cpu-clock:u`, símbolos
+con `--symfs` en el PC) · capturas `--screenshot-sequence` · registro de transferencias de pantalla.
+
+En este repo: `scripts/devserver.py` + agente `OOT3D Dev.sh` (pruebas por red; funciones `bench`, `perfrec`),
+`scripts/wsl/console_build.sh` (compilar y empaquetar en un paso), `scripts/summarize_results.py` (tabla A/B),
+`scripts/wsl/det_run.sh` (huella determinista) y `docs/PRUEBAS.md` (protocolo completo).
 
 ## 8. Script de diagnóstico de la consola
 
