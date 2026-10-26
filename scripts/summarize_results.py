@@ -74,7 +74,7 @@ def main() -> int:
         if len(values) > 1:
             p50 = statistics.mean(values)
             spread = max(values) - min(values)
-            print(f"| **{group} (media de {len(values)})** | **{p50:.1f}** ±{spread / 2:.1f} | | "
+            print(f"| **{group} (media de {len(values)})** | **{p50:.1f}** +/-{spread / 2:.1f} | | "
                   f"| **{1000 / p50:.1f}** | {change(p50)} |")
     return 0
 

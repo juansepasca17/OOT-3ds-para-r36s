@@ -214,3 +214,14 @@ Conclusión: el costo está en el código generado → traductor v2 (`docs/TRADU
   (lanzador `OOT3D v1.2.0-beta`).
 - Nota: los benchmarks de consola miden la **demo de la pantalla de título** (no hay guardado rápido en la SD).
 - El menú incluye un preset **Toon** (cel-shading): el "modo cartoon" pedido al inicio.
+
+### C1b + D3 — opciones R36S y dibujo a medio ritmo (2026-10-26)
+- Menú Fn → Game → **R36S performance**: Half-rate drawing, Simple audio, Parallel draw processing, Reduced
+  actor distance. Se guardan en `config/r36s_perf.json` (módulo `oot3d_r36s_performance.{h,cpp}`); variables
+  `OOT3D_HALF_RATE_DRAW` / `OOT3D_SIMPLE_AUDIO` / `OOT3D_PARALLEL_FRONTEND` / `OOT3D_REDUCED_ACTORS` para A/B.
+- D3: el generador acepta `GATED_FUNCTIONS` (entrada → predicado del host). `Gameplay_Draw` (0x002E25F0) vuelve
+  al llamador uno de cada dos frames. Cambia **un solo shard** (recompilación ~40 s).
+- La 3DS presenta la escena un frame después de dibujarla: el frame siguiente al salto salía negro. Se oculta
+  ese frame (sin `SDL_GL_SwapWindow`; la pantalla conserva la imagen anterior).
+- Consola (trabajo 013, A/B x2, demo de título): apagado 79,7 ms (12,5 fps) → encendido **68,8 ms (14,5 fps,
+  +15,8 %)** de lógica; la imagen se actualiza a la mitad.

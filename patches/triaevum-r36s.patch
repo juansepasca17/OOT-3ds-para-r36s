@@ -1,5 +1,5 @@
 diff --git a/CMake/oot3d/game.cmake b/CMake/oot3d/game.cmake
-index fdb9aa9..f5492b2 100644
+index fdb9aa9..9c14c1c 100644
 --- a/CMake/oot3d/game.cmake
 +++ b/CMake/oot3d/game.cmake
 @@ -318,6 +318,10 @@ target_link_libraries(oot3d_native_game PRIVATE
@@ -13,6 +13,14 @@ index fdb9aa9..f5492b2 100644
  if (TARGET oot3d_native_a32_aot OR TARGET oot3d_native_whole_aot OR
      OOT3D_DIRECT_AOT_PLUGIN)
      target_sources(oot3d_native_game PRIVATE
+@@ -345,6 +349,7 @@ if (TARGET oot3d_native_a32_aot OR TARGET oot3d_native_whole_aot OR
+         tools/oot3d/native_game_runtime/oot3d_native_actor_interactions.cpp
+         tools/oot3d/native_game_runtime/oot3d_actor_visibility_policy.cpp
+         tools/oot3d/native_game_runtime/oot3d_native_a32_actor_visibility.cpp
++        tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp
+         tools/oot3d/native_game_runtime/oot3d_native_pcm_diagnostics.cpp
+         tools/oot3d/native_game_runtime/oot3d_native_controls_settings_panel.cpp
+         tools/oot3d/native_game_runtime/oot3d_game_language_panel.cpp
 diff --git a/runtime/three_ds_recomp/src/fast/Fast3dGui.cpp b/runtime/three_ds_recomp/src/fast/Fast3dGui.cpp
 index b49d215..55c299e 100644
 --- a/runtime/three_ds_recomp/src/fast/Fast3dGui.cpp
@@ -784,10 +792,17 @@ index 6308e40..a06c8fd 100644
  #endif
          InitNativePica();
 diff --git a/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp b/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
-index 5938cd9..78c518a 100644
+index 5938cd9..682b09c 100644
 --- a/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
 +++ b/runtime/three_ds_recomp/src/fast/backends/gfx_sdl2.cpp
-@@ -416,6 +416,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -1,5 +1,6 @@
+ #if defined(ENABLE_OPENGL) || defined(__APPLE__)
+ 
++#include <atomic>
+ #include <algorithm>
+ #include <stdio.h>
+ #include <stdexcept>
+@@ -416,6 +417,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
      SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
      SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -799,7 +814,7 @@ index 5938cd9..78c518a 100644
  #endif
  
  #ifdef _WIN32
-@@ -521,6 +526,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -521,6 +527,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          }
  
          SDL_GL_MakeCurrent(mWnd, mCtx);
@@ -811,10 +826,25 @@ index 5938cd9..78c518a 100644
  #ifdef __SWITCH__
          if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
              throw std::runtime_error(std::string("Switch OpenGL loader initialization failed: ") + SDL_GetError());
-@@ -904,6 +914,22 @@ void GfxWindowBackendSDL2::SwapBuffersBegin() {
+@@ -884,6 +895,13 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
+     previous_time = t;
+ }
+ 
++// R36S half-rate drawing: a frame whose 3D scene the game did not draw is not
++// presented, so the window keeps showing the previous picture.
++static std::atomic<bool> sSuppressNextSwap{false};
++void SetSuppressNextSwap(bool suppress) noexcept {
++    sSuppressNextSwap.store(suppress, std::memory_order_relaxed);
++}
++
+ void GfxWindowBackendSDL2::SwapBuffersBegin() {
+     bool nextVsyncEnabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_VSYNC_ENABLED, 1);
+ 
+@@ -904,7 +922,25 @@ void GfxWindowBackendSDL2::SwapBuffersBegin() {
          if (mTargetFps != 0U) {
              SyncFramerateWithTime();
          }
+-        SDL_GL_SwapWindow(mWnd);
 +        // OOT3D_GL_FINISH_TIMING=1 (diagnostics): wait for the GPU before the
 +        // swap and report how long that wait takes, i.e. the GPU tail per frame.
 +        static const bool finishTiming = getenv("OOT3D_GL_FINISH_TIMING") != nullptr;
@@ -831,9 +861,12 @@ index 5938cd9..78c518a 100644
 +                frames = 0U;
 +            }
 +        }
-         SDL_GL_SwapWindow(mWnd);
++        if (!sSuppressNextSwap.exchange(false, std::memory_order_relaxed)) {
++            SDL_GL_SwapWindow(mWnd);
++        }
      }
  }
+ 
 diff --git a/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py b/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py
 index fed3de8..f509913 100644
 --- a/tools/oot3d/native_a32_runtime/audit_whole_aot_product.py
@@ -994,7 +1027,7 @@ index 8d93547..12fa3ab 100644
              self.assertNotIn("a32::VfpBinary32Add(", source)
  
 diff --git a/tools/oot3d/native_a32_runtime/whole_aot_cpp.py b/tools/oot3d/native_a32_runtime/whole_aot_cpp.py
-index 42f991d..f0d7838 100644
+index 42f991d..3fb2c81 100644
 --- a/tools/oot3d/native_a32_runtime/whole_aot_cpp.py
 +++ b/tools/oot3d/native_a32_runtime/whole_aot_cpp.py
 @@ -1399,7 +1399,7 @@ def _emit_vfp(item: Instruction) -> list[str]:
@@ -1039,11 +1072,54 @@ index 42f991d..f0d7838 100644
              ]
          )
      else:
+@@ -1838,6 +1838,14 @@ def _symbol(name: str, entry: int) -> str:
+     return f"{sanitized}_{entry:08X}"
+ 
+ 
++# Guest functions the host may skip entirely, keyed by entry: the named
++# predicate (defined by the runtime in Oot3dNativeGame::GeneratedWholeAot)
++# is asked on every call. Gameplay_Draw: R36S "draw at half rate" option.
++GATED_FUNCTIONS: dict[int, str] = {
++    0x002E25F0: "Oot3dNativeSkipGameplayDraw",
++}
++
++
+ def _render_function(
+     function: Function,
+     function_symbols: dict[int, str],
+@@ -1904,9 +1912,19 @@ def _render_function(
+         lines.extend(f"        r{index} = state.R[{index}];" for index in promoted_registers)
+         if optimization.promoted_flags != Flag.NONE:
+             lines.append("        flags = state.Flags;")
++    gate = GATED_FUNCTIONS.get(function.entry)
+     lines.extend(
+         [
+             "    };",
++            *([
++                # Host-controlled skip of a whole guest function (R36S
++                # performance options): return to the caller as `bx lr`.
++                f"    extern bool {gate}() noexcept;",
++                f"    if (entryPc == 0x{function.entry:08X}U && {gate}()) {{",
++                "        commitState();",
++                "        return Oot3dAotReturned(state.R[14]);",
++                "    }",
++            ] if gate is not None else []),
+             "    switch (entryPc) {",
+         ]
+     )
 diff --git a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
-index 6c029b6..28d52b4 100644
+index 6c029b6..f22fd37 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_in_game_menu.cpp
-@@ -12,6 +12,7 @@
+@@ -1,6 +1,7 @@
+ #include "oot3d_in_game_menu.h"
+ 
+ #include "oot3d_menu_presentation.h"
++#include "oot3d_r36s_performance.h"
+ #include "oot3d_top_screen_controls.h"
+ 
+ #include "fast/oot3d/graphics_settings_window.h"
+@@ -12,6 +13,7 @@
  #include <cctype>
  #include <cmath>
  #include <cstdio>
@@ -1051,7 +1127,45 @@ index 6c029b6..28d52b4 100644
  #include <functional>
  #include <utility>
  
-@@ -894,8 +895,17 @@ void InGameMenu::UpdateSavestateOutcome() {
+@@ -834,6 +836,37 @@ void InGameMenu::BuildGameTab(Menu::Document &document) {
+     tab.Rows.push_back(action("Load last state + settings", "Loads the most recent save state and applies the settings it carries.",
+                               SavestateRequestKind::Load, true));
+   }
++  // R36S port options (config/r36s_perf.json), applied at once.
++  tab.Rows.push_back(Heading("R36S performance"));
++  const auto r36sToggle = [](std::string key, std::string help, bool R36sPerformanceSettings::*field) {
++    Row row;
++    row.Key = std::move(key);
++    row.Kind = RowKind::Toggle;
++    row.Help = std::move(help);
++    row.Read = [field] { return R36sPerformance::Instance().Get().*field ? 1 : 0; };
++    row.Write = [field](int value) {
++      auto settings = R36sPerformance::Instance().Get();
++      settings.*field = value != 0;
++      WriteResult result;
++      if (!R36sPerformance::Instance().Set(settings, &result.Message)) result.Error = true;
++      return result;
++    };
++    row.Modified = [field] { return R36sPerformance::Instance().Get().*field != R36sPerformanceSettings{}.*field; };
++    return row;
++  };
++  tab.Rows.push_back(r36sToggle("Half-rate drawing",
++                                "The game draws the 3D scene every other frame and repeats the picture in between. "
++                                "Game speed, input and sound stay the same; motion looks less fluid. Faster.",
++                                &R36sPerformanceSettings::HalfRateDraw));
++  tab.Rows.push_back(r36sToggle("Simple audio", "Cheaper sound mixing without sample interpolation. Slightly rougher "
++                                "music and effects. Faster.", &R36sPerformanceSettings::SimpleAudio));
++  tab.Rows.push_back(r36sToggle("Parallel draw processing",
++                                "Prepares the drawing commands on another CPU core. No visual change. Faster.",
++                                &R36sPerformanceSettings::ParallelFrontend));
++  tab.Rows.push_back(r36sToggle("Reduced actor distance",
++                                "Draws and updates characters and objects at a shorter distance. Distant ones "
++                                "pop in later and gameplay can differ. Faster.",
++                                &R36sPerformanceSettings::ReducedActors));
+   document.Tabs.push_back(std::move(tab));
+ }
+ 
+@@ -894,8 +927,17 @@ void InGameMenu::UpdateSavestateOutcome() {
  }
  
  void InGameMenu::Update(const InGameMenuHostInput &input, bool hostGuiOwnsInput, double elapsedSeconds) {
@@ -1167,10 +1281,16 @@ index d876a6d..372355a 100644
      phaseTiming.PicaBackendSeconds += workerPhaseTiming.PicaBackendSeconds;
      phaseTiming.VisualReplaySeconds += workerPhaseTiming.VisualReplaySeconds;
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_frame.cpp b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_frame.cpp
-index 0102691..9c84388 100644
+index 0102691..e766222 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_frame.cpp
 +++ b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_frame.cpp
-@@ -3,6 +3,8 @@
+@@ -1,8 +1,14 @@
+ // Native A32 window session: one frame of the loop and the renderer-side work it schedules.
+ #include "oot3d_native_a32_window_session.h"
++#include "oot3d_r36s_performance.h"
++namespace Fast {
++void SetSuppressNextSwap(bool suppress) noexcept;
++}
  #include "fast/renderer3ds/pica_surface_debug.h"
  #include "oot3d/renderer/ui_presentation_layout.h"
  #include "oot3d_native_room_shadow_shell.h"
@@ -1179,7 +1299,7 @@ index 0102691..9c84388 100644
  
  namespace Oot3dA32Window {
  
-@@ -582,6 +584,12 @@ bool NativeA32WindowSession::RunFrame() {
+@@ -582,6 +588,12 @@ bool NativeA32WindowSession::RunFrame() {
    // native text, on the widescreen canvas so its dim covers the window.
    if (inGameMenu.IsOpen()) {
      auto menuPrimitives = inGameMenu.BuildPresentation(1280.0F / 3.0F, 240.0F);
@@ -1192,6 +1312,30 @@ index 0102691..9c84388 100644
      auto menuTextures = n64UiRenderer.PrepareTextures(menuPrimitives);
      renderStream.Submit([&, primitives = std::move(menuPrimitives), uiRegion,
                           prepared = std::move(menuTextures)]() mutable {
+@@ -603,10 +615,13 @@ bool NativeA32WindowSession::RunFrame() {
+   preparationScreen.Draw(preparationStatus);
+   gui->EndDraw();
+   presentSteps.Mark("gui_end_draw");
+-  renderStream.Submit([&, width, height,
++  // R36S half-rate drawing: a frame without a drawn scene is not presented.
++  const bool drawSkipped = Oot3dNativeGame::R36sPerformance::Instance().ConsumeDrawSkipped();
++  renderStream.Submit([&, width, height, drawSkipped,
+                        presentationSerial = presentationFrameCount,
+                        forcedScreenshot = std::exchange(pendingForcedScreenshot, {})] {
+     if (!forcedScreenshot.empty()) screenshotState.ForcedPath = forcedScreenshot;
++    if (drawSkipped) Fast::SetSuppressNextSwap(true);
+     if (rendererFrameSkipped) {
+       capturedTemporalSample.reset();
+       window.EndFrame();
+@@ -614,7 +629,7 @@ bool NativeA32WindowSession::RunFrame() {
+       inputLatencyTrace.DiscardPending(presentationSerial);
+       return;
+     }
+-    MaybeWriteFramebufferScreenshot(
++    if (!drawSkipped) MaybeWriteFramebufferScreenshot(
+         hostArgs, api, width, height,
+         static_cast<uint32_t>(presentationSerial), screenshotState,
+         capturedTemporalSample ? &*capturedTemporalSample : nullptr);
 diff --git a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_input.cpp b/tools/oot3d/native_game_runtime/oot3d_native_a32_window_input.cpp
 index bddcb6b..9a9d746 100644
 --- a/tools/oot3d/native_game_runtime/oot3d_native_a32_window_input.cpp
@@ -1508,6 +1652,173 @@ index 080be30..2e9cae5 100644
  };
  
  } // namespace Oot3dNativeGame
+diff --git a/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp
+new file mode 100644
+index 0000000..2456904
+--- /dev/null
++++ b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.cpp
+@@ -0,0 +1,90 @@
++#include "oot3d_r36s_performance.h"
++
++#include <nlohmann/json.hpp>
++
++#include <cstdlib>
++#include <fstream>
++
++namespace Oot3dNativeGame {
++namespace {
++
++constexpr const char* kKeys[] = {"HalfRateDraw", "SimpleAudio", "ParallelFrontend", "ReducedActors"};
++constexpr const char* kEnvironment[] = {"OOT3D_HALF_RATE_DRAW", "OOT3D_SIMPLE_AUDIO",
++                                        "OOT3D_PARALLEL_FRONTEND", "OOT3D_REDUCED_ACTORS"};
++
++bool* Field(R36sPerformanceSettings& settings, size_t index) noexcept {
++    switch (index) {
++    case 0: return &settings.HalfRateDraw;
++    case 1: return &settings.SimpleAudio;
++    case 2: return &settings.ParallelFrontend;
++    default: return &settings.ReducedActors;
++    }
++}
++
++} // namespace
++
++R36sPerformance& R36sPerformance::Instance() {
++    static R36sPerformance instance;
++    return instance;
++}
++
++R36sPerformance::R36sPerformance() {
++    const char* path = std::getenv("OOT3D_R36S_CONFIG");
++    mPath = path != nullptr ? path : "config/r36s_perf.json";
++    R36sPerformanceSettings settings;
++    if (std::ifstream input(mPath); input) {
++        const auto json = nlohmann::json::parse(input, nullptr, false);
++        for (size_t index = 0; index < std::size(kKeys); ++index) {
++            if (json.is_object() && json.contains(kKeys[index]) && json[kKeys[index]].is_boolean()) {
++                *Field(settings, index) = json[kKeys[index]].get<bool>();
++            }
++        }
++    }
++    for (size_t index = 0; index < std::size(kEnvironment); ++index) {
++        if (const char* value = std::getenv(kEnvironment[index])) {
++            *Field(settings, index) = value[0] == '1';
++        }
++    }
++    Publish(settings);
++}
++
++void R36sPerformance::Publish(const R36sPerformanceSettings& settings) noexcept {
++    mHalfRateDraw.store(settings.HalfRateDraw, std::memory_order_relaxed);
++    mSimpleAudio.store(settings.SimpleAudio, std::memory_order_relaxed);
++    mParallelFrontend.store(settings.ParallelFrontend, std::memory_order_relaxed);
++    mReducedActors.store(settings.ReducedActors, std::memory_order_relaxed);
++}
++
++R36sPerformanceSettings R36sPerformance::Get() const noexcept {
++    return {HalfRateDraw(), SimpleAudio(), ParallelFrontend(), ReducedActors()};
++}
++
++bool R36sPerformance::Set(const R36sPerformanceSettings& settings, std::string* error) {
++    Publish(settings);
++    nlohmann::json json = nlohmann::json::object();
++    auto copy = settings;
++    for (size_t index = 0; index < std::size(kKeys); ++index) json[kKeys[index]] = *Field(copy, index);
++    std::ofstream output(mPath, std::ios::trunc);
++    output << json.dump(2) << '\n';
++    if (!output) {
++        if (error != nullptr) *error = "Cannot save " + mPath.string();
++        return false;
++    }
++    return true;
++}
++
++namespace GeneratedWholeAot {
++
++// Gameplay_Draw gate (whole_aot_cpp.py GATED_FUNCTIONS): with half-rate
++// drawing on, every other call returns at once.
++bool Oot3dNativeSkipGameplayDraw() noexcept {
++    static unsigned calls = 0U;
++    auto& performance = R36sPerformance::Instance();
++    if (!performance.HalfRateDraw()) return false;
++    if ((calls++ & 1U) == 0U) return false;
++    performance.MarkDrawSkipped();
++    return true;
++}
++
++} // namespace GeneratedWholeAot
++} // namespace Oot3dNativeGame
+diff --git a/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h
+new file mode 100644
+index 0000000..527f1b0
+--- /dev/null
++++ b/tools/oot3d/native_game_runtime/oot3d_r36s_performance.h
+@@ -0,0 +1,65 @@
++#pragma once
++
++// Performance options of the R36S (RK3326) port, shown in the in-game menu
++// (Game > R36S performance) and stored in config/r36s_perf.json.
++//
++// Environment overrides, for A/B measurements (1 on, 0 off):
++//   OOT3D_HALF_RATE_DRAW, OOT3D_SIMPLE_AUDIO, OOT3D_PARALLEL_FRONTEND,
++//   OOT3D_REDUCED_ACTORS; OOT3D_R36S_CONFIG overrides the file path.
++
++#include <atomic>
++#include <filesystem>
++#include <string>
++
++namespace Oot3dNativeGame {
++
++struct R36sPerformanceSettings {
++    // The game prepares the 3D scene every other frame; the other frames
++    // repeat the previous picture. Logic, input and audio keep full rate.
++    bool HalfRateDraw = true;
++    // Cheaper audio mixing (no sample interpolation).
++    bool SimpleAudio = true;
++    // PICA command processing on a worker core.
++    bool ParallelFrontend = true;
++    // Actors drawn and updated at a shorter distance.
++    bool ReducedActors = false;
++};
++
++class R36sPerformance {
++  public:
++    static R36sPerformance& Instance();
++
++    R36sPerformanceSettings Get() const noexcept;
++    // Applies at once and saves; false (with message) when saving failed.
++    bool Set(const R36sPerformanceSettings& settings, std::string* error);
++
++    bool HalfRateDraw() const noexcept { return mHalfRateDraw.load(std::memory_order_relaxed); }
++    bool SimpleAudio() const noexcept { return mSimpleAudio.load(std::memory_order_relaxed); }
++    bool ParallelFrontend() const noexcept { return mParallelFrontend.load(std::memory_order_relaxed); }
++    bool ReducedActors() const noexcept { return mReducedActors.load(std::memory_order_relaxed); }
++
++    // Half-rate drawing: Gameplay_Draw was skipped this frame (set by the
++    // gate). The CTR presents a scene one frame after drawing it, so the
++    // frame to hide is the next one: called once per presented frame (main
++    // thread), this answers whether the previous frame skipped its draw.
++    void MarkDrawSkipped() noexcept { mDrawSkipped.store(true, std::memory_order_relaxed); }
++    bool ConsumeDrawSkipped() noexcept {
++        const bool previous = mPreviousDrawSkipped;
++        mPreviousDrawSkipped = mDrawSkipped.exchange(false, std::memory_order_relaxed);
++        return previous;
++    }
++
++  private:
++    R36sPerformance();
++    void Publish(const R36sPerformanceSettings& settings) noexcept;
++
++    std::filesystem::path mPath;
++    std::atomic<bool> mHalfRateDraw{true};
++    std::atomic<bool> mSimpleAudio{true};
++    std::atomic<bool> mParallelFrontend{true};
++    std::atomic<bool> mReducedActors{false};
++    std::atomic<bool> mDrawSkipped{false};
++    bool mPreviousDrawSkipped = false;
++};
++
++} // namespace Oot3dNativeGame
 diff --git a/tools/oot3d/ui_menu/oot3d_menu_presentation.h b/tools/oot3d/ui_menu/oot3d_menu_presentation.h
 index 634a3b1..ec05dea 100644
 --- a/tools/oot3d/ui_menu/oot3d_menu_presentation.h
