@@ -127,6 +127,33 @@ La forma de probar rápido (PC, qemu y consola por red) está en [docs/PRUEBAS.m
 3. `mediump` en fragmentos hace caer el compilador de Mali (`llvm.bifrost.fptrunc.te`): no usarlo global.
 4. Menú del port en inglés (el juego sí está en español).
 
+Hola soy el del futuro para quien lo retome de verdad, yo no lo voy a hacer realmente ya no.
+Use un recompilador mejor, y ya.
+
+Exacto: no encontré un repo del port de OoT como tal. Es una compilación de Pocket Native para ese juego, así que la base es la herramienta y no un proyecto de OoT.
+
+Esta es la lista de herramientas y proyectos que aparecen en el `CREDITS.md` de tu carpeta:
+
+**Cadena principal (de la que sale el port)**
+1. [fearkov/zakuro](https://github.com/fearkov/zakuro): emulador de 3DS, la base de todo (MIT).
+2. [fearkov/3dsrecomp](https://github.com/fearkov/3dsrecomp): recompilador AOT de fearkov, el que genera el `title.so` (MIT).
+3. [WINDROID-EMU/3dsrecomp](https://github.com/WINDROID-EMU/3dsrecomp): de genrogamer, une Zakuro con 3dsrecomp. Pocket Native parte de aquí.
+4. [whovian64/pocket-native](https://github.com/whovian64/pocket-native): el fork final, con soporte para handhelds (R36S, Anbernic, etc.) y Android.
+
+**Piezas que usa**
+- [Azahar](https://github.com/azahar-emu/azahar): sus listas de compatibilidad sirven para los perfiles por juego en `titles/`.
+- [citra_system_archives](https://github.com/B3n30/citra_system_archives) de B3n30 (GPL-2.0): fuente de sistema libre para los juegos que usan la fuente compartida de 3DS.
+- [Symphonia](https://github.com/pdeljanix/Symphonia): decodificador de audio AAC (MPL-2.0). El enlace real que da el archivo es `pdeljanic/Symphonia`; revísalo si lo vas a abrir, porque lo cito de memoria del texto.
+- M PLUS Rounded 1c: fuente del menú (OFL 1.1).
+- Unas 70 crates de Rust, listadas en `THIRD_PARTY_LICENSES.txt`.
+
+**Contribuidores de Pocket Native**: gopnikcosmoslav2077 (port a Android), AeolusUX, iArti, Sekyleky, kxn203, Kvn0l, peuic, sabogalc, trbocode, kadeshar y ecer96.
+
+Corrección sobre el enlace de Symphonia: en `CREDITS.md` aparece como `github.com/pdeljanic/Symphonia`, no como lo escribí arriba. Mejor búscalo por nombre antes de abrirlo.
+
+Lo interesante para tu port: Pocket Native ya resuelve R36S con dArkOS, y tiene perfiles por título (`profile.toml`) y un `run.sh` que maneja KMS, núcleos de CPU y el cambio de VT. Si quieres, comparo su `run.sh` con tu launcher, o miro cómo Pocket Native maneja el rendimiento en R36S.
+
+
 ## Licencia
 
 GPL-3.0-or-later, igual que TriAevum. *The Legend of Zelda* es una marca de Nintendo.
