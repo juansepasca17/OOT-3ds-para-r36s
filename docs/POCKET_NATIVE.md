@@ -2,6 +2,8 @@
 
 Última actualización: 2026-11-21. Leer esto primero al retomar (también con /goal).
 
+Guías: [compilar desde cero](COMPILAR.md) · [portar otro juego de 3DS rápido](GUIA_PORT_3DS_RAPIDA.md)
+
 **Estado: cerrado en fix8** (release `pocket-native-fix8`). Metas cumplidas: 30 fps en interiores,
 25–30 en exteriores, sin caídas a 15, español y menú de ajustes (el de Pocket Native). Quedan
 detalles menores en "Pendiente".
