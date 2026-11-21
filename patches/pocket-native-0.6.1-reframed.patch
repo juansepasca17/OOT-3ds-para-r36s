@@ -431,11 +431,23 @@ diff --git a/engine/gpu/src/raster/gles.rs b/engine/gpu/src/raster/gles.rs
 diff --git a/engine/gpu/src/raster.rs b/engine/gpu/src/raster.rs
 --- a/engine/gpu/src/raster.rs
 +++ b/engine/gpu/src/raster.rs
-@@ -2468,6 +2468,27 @@
+@@ -1810,6 +1810,10 @@
+     format: ColorFormat,
+     /// which of red, green, blue and alpha the draw may change.
+     write: [bool; 4],
++    /// with the scissor test excluding a rectangle, the rest of the area
++    /// past the first piece, as left, bottom, right, top: the GPU draws
++    /// the same draw again into each.
++    more: [Option<[i32; 4]>; 3],
+ }
+ 
+ /// what happened to the fragments of a draw, for tracing why a draw that
+@@ -2468,10 +2472,65 @@
          log::info!("a buffer drawn upside down, its dimensions' bit 24 clear, at {:08X}", registers[REG_COLOR_BUFFER_ADDRESS] << 3);
      }
      let (bottom, top) = ((viewport_y.round() as i32).max(0), viewport_top.min(buffer_height as i32));
 +    let (mut left, mut right) = ((viewport_x.round() as i32).max(0), viewport_right.min(buffer_width as i32));
++    let mut excluded: [Option<[i32; 4]>; 3] = [None; 3];
 +    let (mut bottom, mut top) = (bottom, top);
 +    // the scissor test, GPUREG_SCISSORTEST_MODE/POS/DIM: in include mode
 +    // (3) only its rectangle is drawn, in buffer pixels as the viewport's,
@@ -448,18 +460,55 @@ diff --git a/engine/gpu/src/raster.rs b/engine/gpu/src/raster.rs
 +            bottom = bottom.max((start >> 16 & 0x3FF) as i32);
 +            right = right.min((end & 0x3FF) as i32 + 1).max(left);
 +            top = top.min((end >> 16 & 0x3FF) as i32 + 1).max(bottom);
++            if std::env::var_os("ZAKURO_SCISSOR_LOG").is_some() {
++                log::info!("scissor in {}..{} x {}..{} vp {}..{} x {}..{} -> {left}..{right} x {bottom}..{top} target {target_addr:08X} {vertex_count}v",
++                    start & 0x3FF, end & 0x3FF, start >> 16 & 0x3FF, end >> 16 & 0x3FF,
++                    viewport_x.round() as i32, viewport_right, viewport_y.round() as i32, viewport_top);
++            }
 +        }
-+        1 if first_time("the scissor test's exclude mode") => {
-+            // a corner of Ocarina ReFramed's lower screen preview, nothing
-+            // more seen, drawn whole
-+            log::info!("the scissor test's exclude mode is left out, drawn whole");
++        1 => {
++            // everything but its rectangle: up to four pieces around it,
++            // the first the draw's own area, the others drawn again
++            let (start, end) = (registers[REG_SCISSOR_MODE + 1], registers[REG_SCISSOR_MODE + 2]);
++            let (x1, y1) = ((start & 0x3FF) as i32, (start >> 16 & 0x3FF) as i32);
++            let (x2, y2) = ((end & 0x3FF) as i32 + 1, (end >> 16 & 0x3FF) as i32 + 1);
++            let (ex1, ex2, ey1, ey2) = (x1.max(left), x2.min(right), y1.max(bottom), y2.min(top));
++            if std::env::var_os("ZAKURO_SCISSOR_LOG").is_some() {
++                log::info!("scissor out {x1}..{x2} x {y1}..{y2} vp {left}..{right} x {bottom}..{top} target {target_addr:08X} {vertex_count}v");
++            }
++            if ex1 < ex2 && ey1 < ey2 {
++                let pieces = [
++                    [left, bottom, right, ey1],
++                    [left, ey2, right, top],
++                    [left, ey1, ex1, ey2],
++                    [ex2, ey1, right, ey2],
++                ];
++                let mut kept = pieces.into_iter().filter(|[l, b, r, t]| l < r && b < t);
++                match kept.next() {
++                    Some([l, b, r, t]) => (left, bottom, right, top) = (l, b, r, t),
++                    None => right = left,
++                }
++                for (slot, piece) in excluded.iter_mut().zip(kept) {
++                    *slot = Some(piece);
++                }
++            }
 +        }
 +        _ => {}
 +    }
      let (bottom, top) = match flip {
          Some(_) => (buffer_height as i32 - top, buffer_height as i32 - bottom),
          None => (bottom, top),
-@@ -2523,9 +2544,9 @@
+     };
++    let more = excluded.map(|piece| {
++        piece.map(|[l, b, r, t]| match flip {
++            Some(_) => [l, buffer_height as i32 - t, r, buffer_height as i32 - b],
++            None => [l, b, r, t],
++        })
++    });
+ 
+     // draws are far more frequent than fills or transfers (thousands per
+     // second versus dozens), so this stays at trace level to keep debug
+@@ -2523,14 +2582,15 @@
      let state = DrawState {
          target: ColorTarget {
              addr: target_addr,
@@ -471,6 +520,42 @@ diff --git a/engine/gpu/src/raster.rs b/engine/gpu/src/raster.rs
              top,
              buffer_width,
              buffer_height,
+             format: target_format,
+             write: std::array::from_fn(|channel| color_writable && color_mask & (1 << channel) != 0),
++            more,
+         },
+         depth_map: DepthMap::read(registers),
+         depth_stencil: DepthStencil::read(registers, memory),
+@@ -2612,7 +2672,13 @@
+             let mut draw = state.hardware(registers, host::Geometry::Shaded(&shading));
+             draw.small = small;
+             match hardware.draw(memory, &draw) {
+-                Ok(()) => return (indices.len() / 3) as u32,
++                Ok(()) => {
++                    for piece in state.target.more.iter().flatten() {
++                        draw.scissor = *piece;
++                        let _ = hardware.draw(memory, &draw);
++                    }
++                    return (indices.len() / 3) as u32;
++                }
+                 Err(_) if fetched.is_some() => return NOT_FETCHED,
+                 Err(error) if error == gles::COMPILING && skippable => {
+                     gles::WAITED[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+@@ -2689,7 +2755,13 @@
+             draw.skippable = skippable;
+             draw.small = small;
+             match hardware.draw(memory, &draw) {
+-                Ok(()) => return triangle_count as u32,
++                Ok(()) => {
++                    for piece in state.target.more.iter().flatten() {
++                        draw.scissor = *piece;
++                        let _ = hardware.draw(memory, &draw);
++                    }
++                    return triangle_count as u32;
++                }
+                 Err(error) if first_time(&error) => log::error!("the GPU could not draw, {error}, drawing in software"),
+                 Err(_) => {}
+             }
 diff --git a/engine/gpu/src/registers.rs b/engine/gpu/src/registers.rs
 --- a/engine/gpu/src/registers.rs
 +++ b/engine/gpu/src/registers.rs

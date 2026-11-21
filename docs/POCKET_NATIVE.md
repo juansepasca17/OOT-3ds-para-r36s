@@ -40,7 +40,7 @@
 | 9 | Un enlace fallido solo manda a la CPU **esa combinación**; sin `make_room()` (soltar todas las texturas y programas) cuando el driver no dio motivo | Antes: un fallo mandaba el sombreado de vértices de Link (3674 líneas) a la CPU para todas las combinaciones y vaciaba la caché → parpadeo, mundo que desaparece, 9–15 fps | `engine/gpu/src/raster/gles.rs` | fix6: 100 % de velocidad toda la partida |
 | 10 | El traductor directo a AArch64 (`RECOMP_A64`) no toma las funciones del mod ni las del juego que saltan al mod (524 de 13 363); van por C | Los ganchos del mod devuelven flags y retornan a `lr+0xC`; el camino en C está verificado (PC: imagen idéntica a interpretado). Medida de seguridad | `recompiler/src/codegen/a64.rs` (`worth`) | Sin costo medible (probe 127–133 %) |
 | 11 | `RECOMP_EXTRA=0` deja el código del mod al intérprete | Para A/B "mod recompilado vs interpretado" | `recompiler/src/image.rs` | Herramienta de diagnóstico |
-| 12 | **Scissor de la GPU (PICA `0x065`–`0x067`), modo incluir**: el rectángulo de dibujo se recorta también al scissor, no solo al viewport. Modo excluir: aviso, se dibuja entero | Pocket Native no lo implementaba; Ocarina ReFramed repite los dibujos de la pantalla de abajo sobre la de arriba recortados con scissor → paneles duplicados en la selección de archivo | `engine/gpu/src/raster.rs`, `registers.rs` | Selección de archivo limpia (PC). Útil para cualquier juego que use scissor |
+| 12 | **Scissor de la GPU (PICA `0x065`–`0x067`)**. Incluir (3): el rectángulo de dibujo se recorta al scissor. Excluir (1): el área que queda se parte en hasta 4 franjas y el dibujo se repite en cada una (fix8). `ZAKURO_SCISSOR_LOG=1` registra cada uso | Pocket Native no lo implementaba; Ocarina ReFramed repite los dibujos de la pantalla de abajo sobre la de arriba recortados con scissor → paneles duplicados en la selección de archivo | `engine/gpu/src/raster.rs`, `registers.rs` | Selección de archivo limpia (PC). Útil para cualquier juego que use scissor |
 | 13 | `scripts/device/run.sh` exporta `ZAKURO_HIDE_BOTTOM=1` | Con fix5/6 resuelto, saltar la pantalla de abajo sí funciona (la culpa de fix2 era Mali) | kit | Probe: 126–135 % → 131–144 %, hilo gles −7 puntos |
 | 7 | Kit: `CARGO_NET_RETRY=10`, `CARGO_HTTP_MULTIPLEXING=false` en el contenedor | La red de Docker Desktop corta descargas de crates | `scripts/build.ps1` | Builds estables |
 
@@ -111,7 +111,8 @@ Diagnóstico en el PC sin consola: `scripts/pc/title_x86.sh <rom> interp RECOMP_
 ## Pendiente, en orden
 1. Medir jugando exteriores (campo de Hyrule) y el menú de pausa con fix6.
 1b. ~~Selección de archivo duplicada~~ → arreglado con el scissor (fix7). El recuadro con el inventario táctil en algunas cinemáticas lo dibuja el mod a propósito (sale igual interpretado).
-1c. Gatillos L2/R2 (ZL/ZR) que a veces no responden (reportado con fix5i).
+1c. Gatillos L2/R2 (ZL/ZR) que a veces no responden: `ir:rst` de Pocket Native revisado y correcto (ticks y formato como libctru). Sospecha: la opción del mod "Manual jump" (ZR = saltar) o su atajo de tamaño del HUD (ZR + L + R).
+1d. El inventario táctil en cinemáticas y el texto que a veces se oculta: el mod cree que su menú está abierto (p. ej. tras apretar Start/Select en una escena) y oculta la pasada con scissor excluir de pantalla completa. Comportamiento del mod.
 2. Opciones del juego en el menú (perfil `titles/0004000000033500/profile.toml`) según esa medición:
    pases caros con `drops_when_off` si la GPU pasa a ser el límite.
 3. Etiquetas del botón de acción en español: editar `hud_all00` HD del mod con las del original.
