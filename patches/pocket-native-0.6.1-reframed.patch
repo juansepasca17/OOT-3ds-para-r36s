@@ -428,6 +428,61 @@ diff --git a/engine/gpu/src/raster/gles.rs b/engine/gpu/src/raster/gles.rs
              };
              if same {
                  let (_, last, last_program) = self.fragment.as_ref().expect("the last draw's");
+diff --git a/engine/gpu/src/raster.rs b/engine/gpu/src/raster.rs
+--- a/engine/gpu/src/raster.rs
++++ b/engine/gpu/src/raster.rs
+@@ -2468,6 +2468,27 @@
+         log::info!("a buffer drawn upside down, its dimensions' bit 24 clear, at {:08X}", registers[REG_COLOR_BUFFER_ADDRESS] << 3);
+     }
+     let (bottom, top) = ((viewport_y.round() as i32).max(0), viewport_top.min(buffer_height as i32));
++    let (mut left, mut right) = ((viewport_x.round() as i32).max(0), viewport_right.min(buffer_width as i32));
++    let (mut bottom, mut top) = (bottom, top);
++    // the scissor test, GPUREG_SCISSORTEST_MODE/POS/DIM: in include mode
++    // (3) only its rectangle is drawn, in buffer pixels as the viewport's,
++    // its far corner inside. Ocarina ReFramed replays the bottom screen's
++    // draws onto the top one cut down to pieces this way
++    match registers[REG_SCISSOR_MODE] & 3 {
++        3 => {
++            let (start, end) = (registers[REG_SCISSOR_MODE + 1], registers[REG_SCISSOR_MODE + 2]);
++            left = left.max((start & 0x3FF) as i32);
++            bottom = bottom.max((start >> 16 & 0x3FF) as i32);
++            right = right.min((end & 0x3FF) as i32 + 1).max(left);
++            top = top.min((end >> 16 & 0x3FF) as i32 + 1).max(bottom);
++        }
++        1 if first_time("the scissor test's exclude mode") => {
++            // a corner of Ocarina ReFramed's lower screen preview, nothing
++            // more seen, drawn whole
++            log::info!("the scissor test's exclude mode is left out, drawn whole");
++        }
++        _ => {}
++    }
+     let (bottom, top) = match flip {
+         Some(_) => (buffer_height as i32 - top, buffer_height as i32 - bottom),
+         None => (bottom, top),
+@@ -2523,9 +2544,9 @@
+     let state = DrawState {
+         target: ColorTarget {
+             addr: target_addr,
+-            left: (viewport_x.round() as i32).max(0),
++            left,
+             bottom,
+-            right: viewport_right.min(buffer_width as i32),
++            right,
+             top,
+             buffer_width,
+             buffer_height,
+diff --git a/engine/gpu/src/registers.rs b/engine/gpu/src/registers.rs
+--- a/engine/gpu/src/registers.rs
++++ b/engine/gpu/src/registers.rs
+@@ -22,6 +22,8 @@
+ pub const REG_VIEWPORT_WIDTH_RECIPROCAL: usize = 0x0042;
+ pub const REG_VIEWPORT_HEIGHT: usize = 0x0043;
+ pub const REG_VIEWPORT_HEIGHT_RECIPROCAL: usize = 0x0044;
++/// GPUREG_SCISSORTEST_MODE, then its POS and DIM.
++pub const REG_SCISSOR_MODE: usize = 0x0065;
+ pub const REG_VIEWPORT_DEPTH_RANGE: usize = 0x004D;
+ pub const REG_VIEWPORT_DEPTH_NEAR: usize = 0x004E;
+ /// GPUREG_DEPTHMAP_ENABLE, 1 for a z-buffer, 0 for a w-buffer.
 diff --git a/frontend/src/lib.rs b/frontend/src/lib.rs
 --- a/frontend/src/lib.rs
 +++ b/frontend/src/lib.rs
@@ -674,3 +729,15 @@ diff --git a/scripts/build.ps1 b/scripts/build.ps1
          $image bash /src/scripts/container/inside.sh @arguments
      if ($LASTEXITCODE -ne 0) { $failed += $file }
  }
+diff --git a/scripts/device/run.sh b/scripts/device/run.sh
+--- a/scripts/device/run.sh
++++ b/scripts/device/run.sh
+@@ -10,6 +10,8 @@
+ mkdir -p "$data" "$dir/config"
+ 
+ export ZAKURO_FAST=1 ZAKURO_KMS=1 ZAKURO_DATA="$data" ZAKURO_RECOMPILED="$game/title.so" ZAKURO_SHADER_MANIFEST="$data/shaders.txt" ZAKURO_VERTEX_LIST="$game/vertex/vertex.txt"
++# the bottom screen not drawn while the layout leaves it out (Top only)
++export ZAKURO_HIDE_BOTTOM=1
+ export POCKET_NATIVE_TITLES="$dir/titles" POCKET_NATIVE_POWER="$dir/power.sh" POCKET_NATIVE_CONFIG="$dir/config"
+ # draws to leave out besides the game's options, as ZAKURO_DROP_DRAWS takes them
+ [ -f "$data/drops.txt" ] && export ZAKURO_DROP_DRAWS="$(cat "$data/drops.txt")"
