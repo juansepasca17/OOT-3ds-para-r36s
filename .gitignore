@@ -35,3 +35,10 @@ __pycache__/
 
 # Guia personal (datos de mi consola y mi PC)
 GUIA_PORTEO_R36S_PERSONAL.md
+
+# Mods del juego y parches de RomFS (contienen datos del juego): nunca se suben
+mods/
+*.patch.bin
+romfs.patch
+# Copia del port de Pocket Native de otra persona (binarios y datos del juego)
+Zelda Ocarina of Time 3D/

@@ -1,0 +1,5 @@
+# Para correr pocket-native x86_64 en el PC sin pantalla: Mesa (llvmpipe) da OpenGL ES por software.
+FROM ubuntu:24.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libegl1 libgles2 libgl1-mesa-dri libgbm1 libegl-mesa0 libasound2t64 libudev1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
