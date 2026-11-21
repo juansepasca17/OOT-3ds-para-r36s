@@ -4,12 +4,12 @@
 
 ## Resumen
 
-| | fix1 | **fix2 (instalado)** |
+| | fix1 | fix2 |
 |---|---|---|
 | Velocidad en la casa de Link (probe, misma ruta) | 82–85 % de la 3DS | **125–130 %** |
 | Velocidad media, 14 400 cuadros | 85 % | **111 %** |
 | Código del mod | interpretado | **recompilado** (0,00 % interpretado) |
-| Pantalla de abajo (no se ve) | dibujada a 30 fps | **no se dibuja** |
+| Pantalla de abajo (no se ve) | dibujada a 30 fps | dibujada (saltarla rompía el mod, ver fix3) |
 | Idioma | inglés | **español** (con HUD del mod) |
 
 ## Qué hay y dónde
@@ -33,9 +33,13 @@
 | 1 | `svcOpenProcess` (0x33) y `svcControlProcessMemory` (0x70; PROTECT no hace nada) | Los mods de código estilo Magikoopa/randomizer (cargador en `.text` que marca su código como ejecutable) llaman a estos SVC al arrancar; sin ellos el juego hace `svcBreak` | `engine/core/src/kernel/svc.rs` | El juego con el mod arranca |
 | 2 | El cargador copia lo que la imagen de código trae después de `.data` dentro de `.bss` | Esos mods agrandan `.bss` en el exheader y ponen su código ahí (aquí `0x5C7000`); la consola y Azahar copian la imagen entera, Pocket Native solo los segmentos | `engine/core/src/loader.rs` | El código del mod existe en memoria |
 | 3 | El recompilador ve el código del mod: el texto se extiende hasta el final de la imagen, con **huecos** (`Segment::holes`) sobre `.rodata/.data/.bss` y sobre tramos de ≥256 ceros | Sin huecos, las funciones Thumb seguían "decodificando" ceros (`lsls r0,r0,#0`) y datos: 23 M de instrucciones y 530 MiB de C | `recompiler/src/image.rs`, `discover.rs` (+ constructores en `codegen/*`, `cro.rs`) | Mod recompilado: **+52 % de velocidad** en juego. Bonus: el análisis del juego base baja de 6,5 M a 1,3 M instrucciones decodificadas |
-| 4 | Pantalla de abajo oculta: si el layout no la muestra, cada dibujo al framebuffer de abajo se omite uno por uno (aunque se mezcle con los de arriba). Seguro: si ese buffer llega a la pantalla de arriba, se apaga solo | El salto de Pocket Native se apaga para siempre cuando un juego dibuja ambas pantallas entre dos transferencias (`both_screens`), como hace este mod | `engine/gpu/src/lib.rs` (`draws_hidden_bottom`), `engine/core/src/lib.rs` (`present_panel`) | La de abajo deja de dibujarse en "Top only" |
+| 4 | **Opcional, apagado por defecto (`ZAKURO_HIDE_BOTTOM=1`)**. Pantalla de abajo oculta: si el layout no la muestra, cada dibujo al framebuffer de abajo se omite uno por uno (aunque se mezcle con los de arriba). Seguro: si ese buffer llega a la pantalla de arriba, se apaga solo | El salto de Pocket Native se apaga para siempre cuando un juego dibuja ambas pantallas entre dos transferencias (`both_screens`), como hace este mod | `engine/gpu/src/lib.rs` (`draws_hidden_bottom`), `engine/core/src/lib.rs` (`present_panel`) | La de abajo deja de dibujarse en "Top only" |
 | 5 | `romfs.patch` en `games/<id>/data/`: piezas escritas sobre el RomFS (nivel 3), también pasado el final | Cambiar archivos del RomFS sin reconstruir la ROM; los juegos leen el RomFS como bloque crudo | `engine/core/src/services/fs.rs` (`RomFsPatch`) + `scripts/romfs_patch.py` | Español con las texturas del HUD del mod (3 MB) |
 | 6 | Log periódico: `interpreted X% of the instructions` cada 5 s y, con `ZAKURO_INTERP_STATS=1`, las direcciones más interpretadas cada 30 s | Medir el intérprete aunque el juego se corte con una señal (antes solo salía al cerrar limpio) | `engine/core/src/lib.rs`, `frontend/src/lib.rs` | Midió 0,00 % con fix2 |
+| 8 | Programas rechazados por Mali **sin mensaje** (link con log vacío) no se marcan en disco (`.refused`); solo se evitan en esa sesión | Pocket Native los marcaba para siempre: en cada partida siguiente ese sombreado iba a la CPU (15 fps) | `engine/gpu/src/raster/gles/programs.rs` (`refuse`, `REFUSED_NOW`) | Se reintenta en la próxima sesión |
+| 9 | Un enlace fallido solo manda a la CPU **esa combinación**; sin `make_room()` (soltar todas las texturas y programas) cuando el driver no dio motivo | Antes: un fallo mandaba el sombreado de vértices de Link (3674 líneas) a la CPU para todas las combinaciones y vaciaba la caché → parpadeo, mundo que desaparece, 9–15 fps | `engine/gpu/src/raster/gles.rs` | fix6: 100 % de velocidad toda la partida |
+| 10 | El traductor directo a AArch64 (`RECOMP_A64`) no toma las funciones del mod ni las del juego que saltan al mod (524 de 13 363); van por C | Los ganchos del mod devuelven flags y retornan a `lr+0xC`; el camino en C está verificado (PC: imagen idéntica a interpretado). Medida de seguridad | `recompiler/src/codegen/a64.rs` (`worth`) | Sin costo medible (probe 127–133 %) |
+| 11 | `RECOMP_EXTRA=0` deja el código del mod al intérprete | Para A/B "mod recompilado vs interpretado" | `recompiler/src/image.rs` | Herramienta de diagnóstico |
 | 7 | Kit: `CARGO_NET_RETRY=10`, `CARGO_HTTP_MULTIPLEXING=false` en el contenedor | La red de Docker Desktop corta descargas de crates | `scripts/build.ps1` | Builds estables |
 
 Para otro juego con un mod de código igual: aplicar el parche, compilar con el kit y listo; los cambios
@@ -84,8 +88,27 @@ Si `cargo` o `docker build` fallan por DNS, reintentar: es la red de Docker Desk
 | Casa de Link (últimos 10 tramos) | 82–85 % | 125–130 % |
 | GPU (hilo gles) | 30–36 % | 40–44 % (más cuadros por segundo) |
 
+### Ronda 2: lo que salió mal con fix2 y cómo se arregló
+| Versión | Cambio | Resultado jugando |
+|---|---|---|
+| fix2 | mod recompilado + español + pantalla de abajo oculta | parpadeo, menús duplicados, 9–15 fps tras ~1,5 min |
+| fix3 | pantalla de abajo otra vez dibujada | igual (la marca `.refused` de fix2 seguía) |
+| fix4 | borrar `.refused` y no marcar fallos sin mensaje | varios enlaces fallidos → `make_room` → parpadeo |
+| fix5i | motor fix5 + mod interpretado | sin parpadeo, más lento |
+| **fix6 (instalado)** | motor fix5 + mod recompilado con ganchos en C | **100 % de velocidad, 23–30 fps, sin parpadeo** |
+
+Causa real: el driver Mali no logra enlazar a veces el sombreado de Link (3674 líneas + 789 de color)
+y Pocket Native reaccionaba vaciando todo y mandando ese sombreado a la CPU para siempre.
+La selección de archivo duplicada ocurre también con el mod interpretado: es de Pocket Native con
+este mod, no de nuestros cambios (pendiente).
+
+Diagnóstico en el PC sin consola: `scripts/pc/title_x86.sh <rom> interp RECOMP_EXTRA=0` y
+`SO=/pn/title-interp.so probe.sh ...` con `ZAKURO_CLOCK` y `ZAKURO_SHOT_AT` para comparar capturas.
+
 ## Pendiente, en orden
-1. Medir jugando exteriores (campo de Hyrule, bosque Kokiri) y el menú de pausa con fix2.
+1. Medir jugando exteriores (campo de Hyrule) y el menú de pausa con fix6.
+1b. Selección de archivo duplicada (dos copias de los paneles desplazadas).
+1c. Gatillos L2/R2 (ZL/ZR) que a veces no responden (reportado con fix5i).
 2. Opciones del juego en el menú (perfil `titles/0004000000033500/profile.toml`) según esa medición:
    pases caros con `drops_when_off` si la GPU pasa a ser el límite.
 3. Etiquetas del botón de acción en español: editar `hud_all00` HD del mod con las del original.

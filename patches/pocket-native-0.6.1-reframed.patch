@@ -77,12 +77,15 @@ diff --git a/engine/core/src/lib.rs b/engine/core/src/lib.rs
          }
      }
  
-@@ -1144,7 +1147,13 @@
+@@ -1144,7 +1147,16 @@
              PRESENT_WAITED.fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
              presents.fetch_add(1, Ordering::AcqRel);
          }
-+        // a layout with no room for the bottom screen lets its draws go
-+        let bottom_hidden = areas[1].is_none();
++        // a layout with no room for the bottom screen lets its draws go,
++        // with ZAKURO_HIDE_BOTTOM=1 only: Ocarina ReFramed draws parts of
++        // the top screen through the bottom one's buffer
++        static HIDE_BOTTOM: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++        let bottom_hidden = areas[1].is_none() && *HIDE_BOTTOM.get_or_init(|| std::env::var_os("ZAKURO_HIDE_BOTTOM").is_some());
          self.gpu_work(&[], move |gpu, _, guest| {
 +            if gpu.bottom_hidden != bottom_hidden {
 +                log::info!("bottom screen {}", if bottom_hidden { "hidden, its draws left out" } else { "shown again" });
@@ -91,7 +94,7 @@ diff --git a/engine/core/src/lib.rs b/engine/core/src/lib.rs
              let state = Some((gpu.pictures, gpu.shown_address(0), gpu.shown_address(1)));
              // a halfway picture went up for something new, which goes up next
              let new = gpu.presented != state;
-@@ -1259,6 +1268,31 @@
+@@ -1259,6 +1271,31 @@
      }
  }
  
@@ -330,6 +333,101 @@ diff --git a/engine/gpu/src/lib.rs b/engine/gpu/src/lib.rs
      /// in fast mode the bottom screen, which mostly stands still, is drawn
      /// every other picture while its pictures change, every third while the
      /// frontend has been skipping pictures to keep up, and one in six while
+diff --git a/engine/gpu/src/raster/gles/programs.rs b/engine/gpu/src/raster/gles/programs.rs
+--- a/engine/gpu/src/raster/gles/programs.rs
++++ b/engine/gpu/src/raster/gles/programs.rs
+@@ -588,7 +588,7 @@
+     // one the driver turned down before isn't built again, the driver's own
+     // version in the saved copy's name
+     let refused = cached.map(|path| path.with_extension("refused"));
+-    if refused.as_deref().is_some_and(std::path::Path::exists) {
++    if refused.as_deref().is_some_and(|path| path.exists() || REFUSED_NOW.lock().unwrap().contains(path)) {
+         return Err(REFUSED.to_owned());
+     }
+     let _compiling = compiler_lock();
+@@ -677,12 +677,24 @@
+     }
+ }
+ 
++/// programs the driver turned down in this start for a reason that may
++/// pass, not built again until the next one.
++static REFUSED_NOW: std::sync::Mutex<std::collections::BTreeSet<std::path::PathBuf>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
++
+ /// remembers a program the driver turned down, so that the next starts
+-/// don't build it again, unless it was short of memory, which may pass.
++/// don't build it again, unless it was short of memory, which may pass, or
++/// the driver said nothing: Mali's linker fails a long program now and then
++/// with an empty log after linking it fine before, and a program kept from
++/// the GPU for good leaves its draws shaded on the CPU in every start after.
+ fn refuse(path: Option<&std::path::Path>, error: &str) {
+-    if let Some(path) = path.filter(|_| !error.to_lowercase().contains("memory")) {
+-        let _ = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(path, error));
++    let Some(path) = path else { return };
++    let said = error.rsplit_once(", ").map_or(error, |(_, said)| said).trim();
++    if error.to_lowercase().contains("memory") || said.is_empty() {
++        log::warn!("the driver turned a program down without a lasting reason, it is tried again next start");
++        REFUSED_NOW.lock().unwrap().insert(path.to_path_buf());
++        return;
+     }
++    let _ = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(path, error));
+ }
+ 
+ /// a program for the compiler thread to make.
+diff --git a/engine/gpu/src/raster/gles.rs b/engine/gpu/src/raster/gles.rs
+--- a/engine/gpu/src/raster/gles.rs
++++ b/engine/gpu/src/raster/gles.rs
+@@ -2983,22 +2983,22 @@
+                 }
+                 Err(error) => {
+                     // the driver out of memory, most likely: the next draw
+-                    // that needs it tries again once room is made
++                    // that needs it tries again once room is made. not when
++                    // it said nothing: Mali's linker fails a long program
++                    // now and then with an empty log, and letting go of
++                    // every texture and program for it flickers the screen
++                    let silent = error.trim_end().ends_with(',');
+                     if error != REFUSED {
+                         log::warn!("{error}");
+-                        if self.retried.insert(key.clone()) {
++                        if !silent && self.retried.insert(key.clone()) {
+                             self.make_room();
+                             continue;
+                         }
+                     }
++                    // only this program's draws go to the CPU: its vertex
++                    // program stays on the GPU for the others, where Link's
++                    // 3674-line one linked with other colour programs
+                     self.inputs.remove(&key);
+-                    if key.3 != 0 {
+-                        for translation in self.translated.values_mut() {
+-                            if *translation == Some(key.3) {
+-                                *translation = None;
+-                            }
+-                        }
+-                    }
+                     self.compiler.as_mut().expect("the compiler is still there").failed.insert(key, error);
+                 }
+             }
+@@ -4473,16 +4473,9 @@
+                     exact = false;
+                     self.program(&generic_constants(&constants), writes_depth, &[], 0, true, None)?.ok_or("no generic program")?
+                 }
+-                Err(error) => {
+-                    if vertex != 0 {
+-                        for translation in self.translated.values_mut() {
+-                            if *translation == Some(vertex) {
+-                                *translation = None;
+-                            }
+-                        }
+-                    }
+-                    return Err(error);
+-                }
++                // this program's draws alone are shaded on the CPU, see the
++                // compiler's results
++                Err(error) => return Err(error),
+             };
+             if same {
+                 let (_, last, last_program) = self.fragment.as_ref().expect("the last draw's");
 diff --git a/frontend/src/lib.rs b/frontend/src/lib.rs
 --- a/frontend/src/lib.rs
 +++ b/frontend/src/lib.rs
@@ -347,7 +445,29 @@ diff --git a/frontend/src/lib.rs b/frontend/src/lib.rs
 diff --git a/recompiler/src/codegen/a64.rs b/recompiler/src/codegen/a64.rs
 --- a/recompiler/src/codegen/a64.rs
 +++ b/recompiler/src/codegen/a64.rs
-@@ -2636,7 +2636,7 @@
+@@ -2133,6 +2133,21 @@
+ /// whether the function is worth translating: ARM code whose entry the
+ /// translator takes, with half its instructions or more.
+ pub fn worth(program: &Program, entry: u32, function: &Function, labels: &BTreeSet<u32>, functions: &BTreeMap<u32, String>, prefix: &str) -> bool {
++    // code a mod put past .data, and the title's functions branching into
++    // it, stay C: Ocarina ReFramed's hooks hand flags back and return past
++    // their call, which the C keeps right and this translation did not
++    if let Some(&(_, extra)) = program.text.holes.first() {
++        let into_mod = |at: &u32| {
++            program.text.read32(*at).is_some_and(|word| {
++                let branch = (word >> 25) & 7 == 0b101;
++                let offset = (((word & 0x00FF_FFFF) << 8) as i32 >> 6) as u32;
++                branch && at.wrapping_add(8).wrapping_add(offset) >= extra
++            })
++        };
++        if entry >= extra || function.instructions.iter().any(into_mod) {
++            return false;
++        }
++    }
+     let translated = coverage(program, entry, function, labels, functions, prefix);
+     // short of the 1 MiB conditional branches reach to the stubs past the end
+     translated > 0 && translated * 2 >= function.instructions.len() && function.instructions.len() <= 8_000
+@@ -2636,7 +2651,7 @@
  
      fn alike(seed: u64, words: &[u32]) {
          let program = Program {
@@ -356,7 +476,7 @@ diff --git a/recompiler/src/codegen/a64.rs b/recompiler/src/codegen/a64.rs
              seeds: vec![(BASE, Source::Entry)],
              slots: None,
          };
-@@ -2877,7 +2877,7 @@
+@@ -2877,7 +2892,7 @@
          for seed in 0..programs {
              let words = program(seed);
              let at = |base: u32| Program {
@@ -469,7 +589,7 @@ diff --git a/recompiler/src/image.rs b/recompiler/src/image.rs
  }
  
  impl Image {
-@@ -68,14 +85,51 @@
+@@ -68,14 +85,54 @@
                  .get(offset..offset + info.size as usize)
                  .unwrap_or_default()
                  .to_vec(),
@@ -485,7 +605,10 @@ diff --git a/recompiler/src/image.rs b/recompiler/src/image.rs
 +        let data_end = data_offset + header.data.size as usize;
 +        let contiguous = header.rodata.address == header.text.address + rodata_offset as u32
 +            && header.data.address == header.text.address + data_offset as u32;
-+        let extra = (contiguous && code.len() > data_end).then(|| {
++        // RECOMP_EXTRA=0 leaves a mod's code to the interpreter, to tell
++        // apart what the recompiled mod does differently
++        let wanted = std::env::var("RECOMP_EXTRA").map_or(true, |value| value != "0");
++        let extra = (wanted && contiguous && code.len() > data_end).then(|| {
 +            let mut bytes = code.to_vec();
 +            bytes[header.text.size as usize..data_end].fill(0);
 +            let extra = header.text.address + data_end as u32;
@@ -522,7 +645,7 @@ diff --git a/recompiler/src/image.rs b/recompiler/src/image.rs
          })
      }
  
-@@ -105,7 +159,7 @@
+@@ -105,7 +162,7 @@
      const BASE: u32 = 0x0010_0000;
  
      fn segment(base: u32, words: &[u32]) -> Segment {
@@ -531,7 +654,7 @@ diff --git a/recompiler/src/image.rs b/recompiler/src/image.rs
      }
  
      #[test]
-@@ -115,6 +169,7 @@
+@@ -115,6 +172,7 @@
              text: segment(BASE, &[0xE12F_FF1E, 0x4770_4770, 0xE12F_FF1E]),
              rodata: segment(0x0020_0000, &[BASE + 8, 12345]),
              data: segment(0x0030_0000, &[BASE + 5]),
