@@ -2,6 +2,10 @@
 
 Última actualización: 2026-11-21. Leer esto primero al retomar (también con /goal).
 
+**Estado: cerrado en fix8** (release `pocket-native-fix8`). Metas cumplidas: 30 fps en interiores,
+25–30 en exteriores, sin caídas a 15, español y menú de ajustes (el de Pocket Native). Quedan
+detalles menores en "Pendiente".
+
 ## Resumen
 
 | | fix1 | fix2 |
@@ -98,7 +102,8 @@ Si `cargo` o `docker build` fallan por DNS, reintentar: es la red de Docker Desk
 | fix4 | borrar `.refused` y no marcar fallos sin mensaje | varios enlaces fallidos → `make_room` → parpadeo |
 | fix5i | motor fix5 + mod interpretado | sin parpadeo, más lento |
 | fix6 | motor fix5 + mod recompilado con ganchos en C | **100 % de velocidad, 23–30 fps, sin parpadeo** |
-| **fix7 (instalado)** | + scissor + pantalla de abajo oculta | 100 %, 25–30 fps; probe 131–144 % |
+| fix7 | + scissor + pantalla de abajo oculta | 100 %, 25–30 fps; probe 131–144 % |
+| **fix8 (instalado, release)** | + scissor modo excluir | **100 %, 30 fps casi todo el tiempo, mínimos 24–27** |
 
 Causa real: el driver Mali no logra enlazar a veces el sombreado de Link (3674 líneas + 789 de color)
 y Pocket Native reaccionaba vaciando todo y mandando ese sombreado a la CPU para siempre.
