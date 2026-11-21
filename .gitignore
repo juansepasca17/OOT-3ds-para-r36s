@@ -42,3 +42,5 @@ mods/
 romfs.patch
 # Copia del port de Pocket Native de otra persona (binarios y datos del juego)
 Zelda Ocarina of Time 3D/
+# Copia personal del juego armado (contiene la ROM): nunca se sube
+para-drive/
