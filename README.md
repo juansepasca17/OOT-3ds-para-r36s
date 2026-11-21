@@ -1,6 +1,11 @@
 # OoT3D para R36S (dArkOS RE)
 
-> **Proyecto cerrado (2026-10-26) en la v1.2.1.** Para retomarlo desde cero: [RETOMAR.md](RETOMAR.md).
+> **Nueva versión (2026-11-21): una pantalla y 30 fps.** Basada en Pocket Native con el mod
+> Ocarina ReFramed: 30 fps en interiores, 25–30 en exteriores, HUD en una pantalla y español.
+> Descarga e instrucciones: [release pocket-native-fix8](https://github.com/juansepasca17/OOT-3ds-para-r36s/releases/tag/pocket-native-fix8).
+> Detalle técnico y cambios al emulador: rama [`pocket-native`](https://github.com/juansepasca17/OOT-3ds-para-r36s/tree/pocket-native), `docs/POCKET_NATIVE.md`.
+>
+> La versión de abajo (TriAevum, v1.2.1) quedó cerrada el 2026-10-26. Para retomarla: [RETOMAR.md](RETOMAR.md).
 
 Port experimental de **The Legend of Zelda: Ocarina of Time 3D** a la **R36S**
 (RK3326, 4× Cortex-A35 a 1.5 GHz, Mali-G31, 1 GB de RAM) con **dArkOS RE**, basado en
@@ -11,6 +16,7 @@ con el renderer portado a **OpenGL ES 3.2**.
 
 | Rama | Qué es |
 |---|---|
+| **`pocket-native`** (release `pocket-native-fix8`) | **Recomendada.** Pocket Native + Ocarina ReFramed: una pantalla, 30 fps, español |
 | **`estable`** (tag `v1.2.1`) | Versión jugable recomendada: ~15,9 fps de lógica en la R36S, HUD y menú Fn visibles |
 | `main` | Igual que `estable` + el benchmark determinista (A5). Plan sin hacer: [RETOMAR.md](RETOMAR.md) |
 
